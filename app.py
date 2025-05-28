@@ -1,29 +1,18 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sentence_transformers import SentenceTransformer
-import nltk
-from sklearn.metrics.pairwise import cosine_similarity
 import plotly.express as px
 import plotly.graph_objects as go
 from io import StringIO
 import re
 from typing import List, Dict, Tuple
-import asyncio
-import aiohttp
 import json
 from datetime import datetime
 import time
-import google.generativeai as genai
-import openai
-from concurrent.futures import ThreadPoolExecutor
 import requests
-
-# Download required NLTK data
-try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.metrics.pairwise import cosine_similarity
+import openai
 
 # Initialize session state
 if 'processed_data' not in st.session_state:
@@ -40,26 +29,49 @@ class LLMCrawler:
     def query_openai(self, query: str, api_key: str) -> Dict:
         """Query OpenAI GPT"""
         try:
-            client = openai.OpenAI(api_key=api_key)
-            response = client.chat.completions.create(
-                model="gpt-4",
-                messages=[
+            headers = {
+                "Authorization": f"Bearer {api_key}",
+                "Content-Type": "application/json"
+            }
+            
+            data = {
+                "model": "gpt-3.5-turbo",
+                "messages": [
                     {"role": "system", "content": "You are a helpful assistant providing accurate, comprehensive answers."},
                     {"role": "user", "content": query}
                 ],
-                max_tokens=1500,
-                temperature=0.7
-            )
-            return {
-                "provider": "OpenAI GPT-4",
-                "query": query,
-                "response": response.choices[0].message.content,
-                "success": True,
-                "timestamp": datetime.now().isoformat()
+                "max_tokens": 1500,
+                "temperature": 0.7
             }
+            
+            response = requests.post(
+                "https://api.openai.com/v1/chat/completions",
+                headers=headers,
+                json=data,
+                timeout=30
+            )
+            
+            if response.status_code == 200:
+                result = response.json()
+                return {
+                    "provider": "OpenAI GPT-3.5",
+                    "query": query,
+                    "response": result['choices'][0]['message']['content'],
+                    "success": True,
+                    "timestamp": datetime.now().isoformat()
+                }
+            else:
+                return {
+                    "provider": "OpenAI GPT-3.5",
+                    "query": query,
+                    "response": "",
+                    "success": False,
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                    "timestamp": datetime.now().isoformat()
+                }
         except Exception as e:
             return {
-                "provider": "OpenAI GPT-4",
+                "provider": "OpenAI GPT-3.5",
                 "query": query,
                 "response": "",
                 "success": False,
@@ -68,18 +80,53 @@ class LLMCrawler:
             }
     
     def query_gemini(self, query: str, api_key: str) -> Dict:
-        """Query Google Gemini"""
+        """Query Google Gemini via REST API"""
         try:
-            genai.configure(api_key=api_key)
-            model = genai.GenerativeModel('gemini-pro')
-            response = model.generate_content(query)
-            return {
-                "provider": "Google Gemini",
-                "query": query,
-                "response": response.text,
-                "success": True,
-                "timestamp": datetime.now().isoformat()
+            url = f"https://generativelanguage.googleapis.com/v1beta/models/gemini-pro:generateContent?key={api_key}"
+            
+            headers = {
+                "Content-Type": "application/json"
             }
+            
+            data = {
+                "contents": [{
+                    "parts": [{
+                        "text": query
+                    }]
+                }]
+            }
+            
+            response = requests.post(url, headers=headers, json=data, timeout=30)
+            
+            if response.status_code == 200:
+                result = response.json()
+                if 'candidates' in result and len(result['candidates']) > 0:
+                    content = result['candidates'][0]['content']['parts'][0]['text']
+                    return {
+                        "provider": "Google Gemini",
+                        "query": query,
+                        "response": content,
+                        "success": True,
+                        "timestamp": datetime.now().isoformat()
+                    }
+                else:
+                    return {
+                        "provider": "Google Gemini",
+                        "query": query,
+                        "response": "",
+                        "success": False,
+                        "error": "No content in response",
+                        "timestamp": datetime.now().isoformat()
+                    }
+            else:
+                return {
+                    "provider": "Google Gemini",
+                    "query": query,
+                    "response": "",
+                    "success": False,
+                    "error": f"HTTP {response.status_code}: {response.text}",
+                    "timestamp": datetime.now().isoformat()
+                }
         except Exception as e:
             return {
                 "provider": "Google Gemini",
@@ -100,7 +147,7 @@ class LLMCrawler:
             }
             
             data = {
-                "model": "claude-3-sonnet-20240229",
+                "model": "claude-3-haiku-20240307",
                 "max_tokens": 1500,
                 "messages": [
                     {"role": "user", "content": query}
@@ -146,60 +193,74 @@ class LLMCrawler:
                            delay_between_requests: float = 1.0) -> List[Dict]:
         """Crawl multiple LLMs with rate limiting"""
         all_responses = []
+        total_requests = len(queries) * len(api_keys)
+        current_request = 0
         
-        for query in queries:
+        progress_bar = st.progress(0)
+        status_text = st.empty()
+        
+        for i, query in enumerate(queries):
             query_responses = []
             
             # Query each LLM
             if api_keys.get('openai'):
-                st.write(f"Querying OpenAI for: {query[:50]}...")
+                current_request += 1
+                status_text.text(f"Querying OpenAI for: {query[:50]}... ({current_request}/{total_requests})")
+                progress_bar.progress(current_request / total_requests)
+                
                 response = self.query_openai(query, api_keys['openai'])
                 query_responses.append(response)
                 time.sleep(delay_between_requests)
             
             if api_keys.get('gemini'):
-                st.write(f"Querying Gemini for: {query[:50]}...")
+                current_request += 1
+                status_text.text(f"Querying Gemini for: {query[:50]}... ({current_request}/{total_requests})")
+                progress_bar.progress(current_request / total_requests)
+                
                 response = self.query_gemini(query, api_keys['gemini'])
                 query_responses.append(response)
                 time.sleep(delay_between_requests)
             
             if api_keys.get('claude'):
-                st.write(f"Querying Claude for: {query[:50]}...")
+                current_request += 1
+                status_text.text(f"Querying Claude for: {query[:50]}... ({current_request}/{total_requests})")
+                progress_bar.progress(current_request / total_requests)
+                
                 response = self.query_claude(query, api_keys['claude'])
                 query_responses.append(response)
                 time.sleep(delay_between_requests)
             
             all_responses.extend(query_responses)
         
+        status_text.empty()
+        progress_bar.empty()
         return all_responses
 
 class SEOAnalyzer:
     def __init__(self):
-        self.model = None
-        self.embeddings = None
+        self.vectorizer = TfidfVectorizer(max_features=1000, stop_words='english')
         
-    @st.cache_resource
-    def load_model(_self):
-        """Load sentence transformer model"""
-        return SentenceTransformer('all-MiniLM-L6-v2')
-    
     def extract_passages(self, text: str, max_length: int = 200) -> List[str]:
-        """Break content into passages"""
+        """Break content into passages using simple sentence splitting"""
         if not text or pd.isna(text):
             return []
         
-        # Split by sentences
-        sentences = nltk.sent_tokenize(str(text))
+        # Simple sentence splitting
+        sentences = re.split(r'[.!?]+', str(text))
         passages = []
         current_passage = ""
         
         for sentence in sentences:
+            sentence = sentence.strip()
+            if not sentence:
+                continue
+                
             if len(current_passage + sentence) <= max_length:
-                current_passage += sentence + " "
+                current_passage += sentence + ". "
             else:
                 if current_passage:
                     passages.append(current_passage.strip())
-                current_passage = sentence + " "
+                current_passage = sentence + ". "
         
         if current_passage:
             passages.append(current_passage.strip())
@@ -207,10 +268,21 @@ class SEOAnalyzer:
         return passages
     
     def generate_embeddings(self, texts: List[str]) -> np.ndarray:
-        """Generate embeddings for text passages"""
-        if not self.model:
-            self.model = self.load_model()
-        return self.model.encode(texts)
+        """Generate TF-IDF embeddings for text passages"""
+        if not texts:
+            return np.array([])
+        
+        # Clean texts
+        clean_texts = [str(text) for text in texts if text and str(text).strip()]
+        if not clean_texts:
+            return np.array([])
+        
+        try:
+            embeddings = self.vectorizer.fit_transform(clean_texts)
+            return embeddings.toarray()
+        except Exception as e:
+            st.error(f"Error generating embeddings: {str(e)}")
+            return np.array([])
     
     def analyze_user_intent(self, query: str, intent: str, reasoning: str) -> Dict:
         """Analyze user intent and provide insights"""
@@ -227,13 +299,13 @@ class SEOAnalyzer:
         """Categorize user intent"""
         intent_lower = intent.lower()
         
-        if any(word in intent_lower for word in ['buy', 'purchase', 'price', 'cost', 'deal']):
+        if any(word in intent_lower for word in ['buy', 'purchase', 'price', 'cost', 'deal', 'shop']):
             return 'Transactional'
-        elif any(word in intent_lower for word in ['how', 'what', 'why', 'when', 'where', 'guide', 'tutorial']):
+        elif any(word in intent_lower for word in ['how', 'what', 'why', 'when', 'where', 'guide', 'tutorial', 'learn']):
             return 'Informational'
-        elif any(word in intent_lower for word in ['best', 'vs', 'compare', 'review', 'top']):
+        elif any(word in intent_lower for word in ['best', 'vs', 'compare', 'review', 'top', 'versus']):
             return 'Commercial Investigation'
-        elif any(word in intent_lower for word in ['near', 'location', 'address', 'directions']):
+        elif any(word in intent_lower for word in ['near', 'location', 'address', 'directions', 'local']):
             return 'Local'
         else:
             return 'Informational'
@@ -243,40 +315,58 @@ class SEOAnalyzer:
         intent_lower = intent.lower()
         strategies = []
         
-        if 'informational' in intent_lower or any(word in intent_lower for word in ['how', 'what', 'guide']):
+        if any(word in intent_lower for word in ['how', 'what', 'guide', 'tutorial', 'learn']):
             strategies.extend([
                 "Create comprehensive, step-by-step content",
                 "Use FAQ format for common questions",
                 "Include relevant examples and case studies",
-                "Structure with clear headings and subheadings"
+                "Structure with clear headings and subheadings",
+                "Add schema markup for HowTo or FAQ content"
             ])
         
-        if 'transactional' in intent_lower or any(word in intent_lower for word in ['buy', 'purchase']):
+        if any(word in intent_lower for word in ['buy', 'purchase', 'price', 'cost']):
             strategies.extend([
                 "Include product specifications and comparisons",
                 "Add pricing information and availability",
                 "Include customer reviews and testimonials",
-                "Optimize for commercial keywords"
+                "Optimize for commercial keywords",
+                "Add product schema markup"
             ])
         
-        if 'comparison' in intent_lower or 'vs' in intent_lower:
+        if any(word in intent_lower for word in ['compare', 'vs', 'best', 'review']):
             strategies.extend([
                 "Create detailed comparison tables",
                 "Highlight pros and cons",
                 "Include objective evaluation criteria",
-                "Add visual comparisons where possible"
+                "Add visual comparisons where possible",
+                "Use review schema markup"
             ])
         
-        return strategies if strategies else ["Focus on comprehensive, accurate information"]
+        if any(word in intent_lower for word in ['near', 'location', 'local']):
+            strategies.extend([
+                "Optimize for local SEO",
+                "Include location-specific information",
+                "Add local business schema markup",
+                "Include contact information and hours"
+            ])
+        
+        return strategies if strategies else ["Focus on comprehensive, accurate information", "Use clear structure and headings", "Include relevant keywords naturally"]
     
     def find_semantic_gaps(self, target_embeddings: np.ndarray, 
                           content_embeddings: np.ndarray, 
                           threshold: float = 0.7) -> List[int]:
         """Find content gaps using cosine similarity"""
-        similarities = cosine_similarity(target_embeddings, content_embeddings)
-        max_similarities = np.max(similarities, axis=1)
-        gaps = np.where(max_similarities < threshold)[0]
-        return gaps.tolist()
+        if target_embeddings.size == 0 or content_embeddings.size == 0:
+            return []
+        
+        try:
+            similarities = cosine_similarity(target_embeddings, content_embeddings)
+            max_similarities = np.max(similarities, axis=1)
+            gaps = np.where(max_similarities < threshold)[0]
+            return gaps.tolist()
+        except Exception as e:
+            st.error(f"Error finding semantic gaps: {str(e)}")
+            return []
     
     def analyze_llm_responses(self, responses: List[Dict]) -> Dict:
         """Analyze LLM responses for patterns and insights"""
@@ -286,7 +376,8 @@ class SEOAnalyzer:
             'providers': list(set([r['provider'] for r in responses])),
             'average_response_length': 0,
             'common_topics': [],
-            'response_quality_score': 0
+            'response_quality_score': 0,
+            'provider_success_rates': {}
         }
         
         successful_responses = [r for r in responses if r.get('success', False)]
@@ -296,12 +387,19 @@ class SEOAnalyzer:
             lengths = [len(r['response']) for r in successful_responses]
             analysis['average_response_length'] = sum(lengths) / len(lengths)
             
+            # Provider success rates
+            for provider in analysis['providers']:
+                provider_responses = [r for r in responses if r['provider'] == provider]
+                provider_successful = [r for r in provider_responses if r.get('success', False)]
+                if provider_responses:
+                    analysis['provider_success_rates'][provider] = len(provider_successful) / len(provider_responses)
+            
             # Extract common themes (simplified)
             all_text = ' '.join([r['response'] for r in successful_responses])
             words = re.findall(r'\b\w+\b', all_text.lower())
             word_freq = {}
             for word in words:
-                if len(word) > 4:  # Filter short words
+                if len(word) > 4 and word not in ['should', 'would', 'could', 'might', 'about', 'where', 'there', 'these', 'those']:
                     word_freq[word] = word_freq.get(word, 0) + 1
             
             # Get top 10 most common words
@@ -334,15 +432,15 @@ def main():
     st.sidebar.subheader("API Keys")
     api_keys = {}
     
-    openai_key = st.sidebar.text_input("OpenAI API Key", type="password")
+    openai_key = st.sidebar.text_input("OpenAI API Key", type="password", help="Get from https://platform.openai.com/api-keys")
     if openai_key:
         api_keys['openai'] = openai_key
     
-    gemini_key = st.sidebar.text_input("Google Gemini API Key", type="password")
+    gemini_key = st.sidebar.text_input("Google Gemini API Key", type="password", help="Get from https://ai.google.dev/")
     if gemini_key:
         api_keys['gemini'] = gemini_key
     
-    claude_key = st.sidebar.text_input("Anthropic Claude API Key", type="password")
+    claude_key = st.sidebar.text_input("Anthropic Claude API Key", type="password", help="Get from https://console.anthropic.com/")
     if claude_key:
         api_keys['claude'] = claude_key
     
@@ -352,7 +450,8 @@ def main():
         min_value=0.1, 
         max_value=1.0, 
         value=0.7, 
-        step=0.05
+        step=0.05,
+        help="Lower values find more gaps"
     )
     
     passage_length = st.sidebar.slider(
@@ -368,8 +467,17 @@ def main():
         min_value=0.5,
         max_value=5.0,
         value=1.0,
-        step=0.5
+        step=0.5,
+        help="Prevent rate limiting"
     )
+    
+    # Sample CSV template
+    with st.sidebar.expander("📋 CSV Template"):
+        st.write("Your CSV should have these columns:")
+        st.code("""query,query_type,user_intent,reasoning
+"how to optimize for AI search",how-to,Learn SEO techniques,User wants actionable steps
+"best CRM software 2024",comparison,Compare CRM solutions,User researching before purchase
+"what is machine learning",definition,Understand ML concepts,User needs foundational knowledge""")
     
     # File upload
     uploaded_file = st.file_uploader(
@@ -382,38 +490,49 @@ def main():
         try:
             # Load data
             df = pd.read_csv(uploaded_file)
-            st.success(f"Loaded {len(df)} queries")
+            st.success(f"✅ Loaded {len(df)} queries")
             
             # Validate required columns
             required_columns = ['query', 'query_type', 'user_intent', 'reasoning']
             missing_columns = [col for col in required_columns if col not in df.columns]
             
             if missing_columns:
-                st.error(f"Missing required columns: {', '.join(missing_columns)}")
+                st.error(f"❌ Missing required columns: {', '.join(missing_columns)}")
                 st.write(f"Available columns: {', '.join(df.columns.tolist())}")
+                st.write("Please ensure your CSV has the required columns as shown in the sidebar template.")
                 return
             
             # Display data preview
-            with st.expander("Data Preview", expanded=True):
-                st.dataframe(df.head())
+            with st.expander("📊 Data Preview", expanded=True):
+                st.dataframe(df.head(10))
                 
-                # Show query type distribution
-                query_type_dist = df['query_type'].value_counts()
-                fig = px.pie(values=query_type_dist.values, names=query_type_dist.index, 
-                           title="Query Type Distribution")
-                st.plotly_chart(fig, use_container_width=True)
+                col1, col2 = st.columns(2)
+                
+                with col1:
+                    # Show query type distribution
+                    query_type_dist = df['query_type'].value_counts()
+                    fig = px.pie(values=query_type_dist.values, names=query_type_dist.index, 
+                               title="Query Type Distribution")
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                with col2:
+                    # Show basic stats
+                    st.metric("Total Queries", len(df))
+                    st.metric("Unique Query Types", df['query_type'].nunique())
+                    st.metric("Average Query Length", f"{df['query'].str.len().mean():.0f} chars")
             
             # Step 1: User Intent Analysis
             st.header("🎯 Step 1: User Intent Analysis")
             
-            intent_analysis = []
-            for _, row in df.iterrows():
-                analysis = analyzer.analyze_user_intent(
-                    row['query'], 
-                    row['user_intent'], 
-                    row['reasoning']
-                )
-                intent_analysis.append(analysis)
+            with st.spinner("Analyzing user intents..."):
+                intent_analysis = []
+                for _, row in df.iterrows():
+                    analysis = analyzer.analyze_user_intent(
+                        row['query'], 
+                        row['user_intent'], 
+                        row['reasoning']
+                    )
+                    intent_analysis.append(analysis)
             
             intent_df = pd.DataFrame(intent_analysis)
             
@@ -423,21 +542,26 @@ def main():
                 # Intent category distribution
                 intent_categories = intent_df['intent_category'].value_counts()
                 fig = px.bar(x=intent_categories.index, y=intent_categories.values,
-                           title="Intent Categories")
+                           title="Categorized Intent Distribution",
+                           color=intent_categories.values,
+                           color_continuous_scale="viridis")
+                fig.update_layout(showlegend=False)
                 st.plotly_chart(fig, use_container_width=True)
             
             with col2:
                 # Sample intent analysis
                 st.subheader("Sample Intent Analysis")
-                sample_idx = st.selectbox("Select query to analyze:", range(len(intent_df)))
+                sample_idx = st.selectbox("Select query to analyze:", 
+                                        range(len(intent_df)),
+                                        format_func=lambda x: f"{x+1}. {intent_analysis[x]['query'][:40]}...")
                 selected_analysis = intent_analysis[sample_idx]
                 
                 st.write(f"**Query:** {selected_analysis['query']}")
                 st.write(f"**Declared Intent:** {selected_analysis['declared_intent']}")
-                st.write(f"**Category:** {selected_analysis['intent_category']}")
+                st.write(f"**Categorized as:** `{selected_analysis['intent_category']}`")
                 st.write(f"**Reasoning:** {selected_analysis['reasoning']}")
                 
-                st.write("**Optimization Strategies:**")
+                st.write("**Recommended Optimization Strategies:**")
                 for strategy in selected_analysis['optimization_strategy']:
                     st.write(f"• {strategy}")
             
@@ -445,25 +569,29 @@ def main():
             st.header("🕷️ Step 2: LLM Response Crawling")
             
             if not api_keys:
-                st.warning("Please add at least one API key in the sidebar to crawl LLMs")
+                st.warning("⚠️ Please add at least one API key in the sidebar to crawl LLMs")
+                st.info("💡 You can get API keys from:\n- OpenAI: https://platform.openai.com/api-keys\n- Google Gemini: https://ai.google.dev/\n- Anthropic Claude: https://console.anthropic.com/")
             else:
-                st.write(f"Available LLMs: {', '.join(api_keys.keys())}")
+                st.write(f"🔑 Available LLMs: {', '.join(api_keys.keys())}")
                 
                 # Select queries to crawl
                 max_queries = st.number_input(
                     "Maximum queries to crawl (to manage API costs):",
                     min_value=1,
                     max_value=len(df),
-                    value=min(5, len(df))
+                    value=min(5, len(df)),
+                    help="Start with a small number to test, then increase"
                 )
                 
                 queries_to_crawl = df['query'].head(max_queries).tolist()
                 
+                # Show cost estimation
+                total_requests = max_queries * len(api_keys)
+                st.info(f"💰 This will make approximately {total_requests} API requests")
+                
                 if st.session_state.llm_responses is None:
-                    if st.button("Start LLM Crawling"):
+                    if st.button("🚀 Start LLM Crawling", type="primary"):
                         with st.spinner("Crawling LLMs... This may take a while"):
-                            progress_bar = st.progress(0)
-                            
                             responses = crawler.crawl_multiple_llms(
                                 queries_to_crawl, 
                                 api_keys, 
@@ -471,14 +599,21 @@ def main():
                             )
                             
                             st.session_state.llm_responses = responses
-                            progress_bar.progress(100)
-                            st.success(f"Completed crawling {len(responses)} responses")
+                            st.success(f"✅ Completed crawling {len(responses)} responses")
                 else:
-                    st.success(f"Using cached responses ({len(st.session_state.llm_responses)} total)")
+                    st.success(f"✅ Using cached responses ({len(st.session_state.llm_responses)} total)")
                     
-                    if st.button("Re-crawl LLMs"):
-                        st.session_state.llm_responses = None
-                        st.rerun()
+                    col1, col2 = st.columns(2)
+                    with col1:
+                        if st.button("🔄 Re-crawl LLMs"):
+                            st.session_state.llm_responses = None
+                            st.rerun()
+                    
+                    with col2:
+                        if st.button("🗑️ Clear Cache"):
+                            st.session_state.llm_responses = None
+                            st.session_state.analysis_results = None
+                            st.success("Cache cleared!")
             
             # Step 3: LLM Response Analysis
             if st.session_state.llm_responses:
@@ -486,6 +621,7 @@ def main():
                 
                 response_analysis = analyzer.analyze_llm_responses(st.session_state.llm_responses)
                 
+                # Metrics
                 col1, col2, col3, col4 = st.columns(4)
                 
                 with col1:
@@ -501,20 +637,59 @@ def main():
                 with col4:
                     st.metric("Quality Score", f"{response_analysis['response_quality_score']:.2f}")
                 
+                # Provider performance
+                if response_analysis['provider_success_rates']:
+                    st.subheader("Provider Performance")
+                    provider_df = pd.DataFrame([
+                        {"Provider": provider, "Success Rate": f"{rate:.1%}", "Success Rate Value": rate}
+                        for provider, rate in response_analysis['provider_success_rates'].items()
+                    ])
+                    
+                    fig = px.bar(provider_df, x="Provider", y="Success Rate Value", 
+                               title="Success Rate by Provider",
+                               color="Success Rate Value",
+                               color_continuous_scale="RdYlGn")
+                    fig.update_layout(showlegend=False)
+                    st.plotly_chart(fig, use_container_width=True)
+                
+                # Common topics
+                if response_analysis['common_topics']:
+                    st.subheader("Most Common Topics in Responses")
+                    topics_df = pd.DataFrame(response_analysis['common_topics'], columns=['Topic', 'Frequency'])
+                    fig = px.bar(topics_df.head(10), x="Frequency", y="Topic", orientation="h",
+                               title="Top Topics Mentioned",
+                               color="Frequency",
+                               color_continuous_scale="blues")
+                    st.plotly_chart(fig, use_container_width=True)
+                
                 # Response details
-                with st.expander("Response Details"):
+                with st.expander("🔍 Detailed Response Analysis"):
+                    response_df = []
+                    for response in st.session_state.llm_responses:
+                        response_df.append({
+                            'Provider': response['provider'],
+                            'Query': response['query'][:50] + '...',
+                            'Success': '✅' if response['success'] else '❌',
+                            'Response Length': len(response.get('response', '')),
+                            'Timestamp': response['timestamp'][:19]
+                        })
+                    
+                    st.dataframe(pd.DataFrame(response_df))
+                
+                # Individual responses
+                with st.expander("📝 Individual LLM Responses"):
                     for i, response in enumerate(st.session_state.llm_responses):
-                        st.write(f"**{response['provider']} - Query: {response['query'][:50]}...**")
+                        st.write(f"**{i+1}. {response['provider']} - {response['query'][:50]}...**")
                         if response['success']:
-                            st.write(f"Response: {response['response'][:300]}...")
+                            st.write(response['response'][:500] + "..." if len(response['response']) > 500 else response['response'])
                         else:
-                            st.error(f"Error: {response.get('error', 'Unknown error')}")
+                            st.error(f"❌ Error: {response.get('error', 'Unknown error')}")
                         st.write("---")
                 
                 # Step 4: Semantic Analysis
                 st.header("🧠 Step 4: Semantic Gap Analysis")
                 
-                if st.button("Perform Semantic Analysis"):
+                if st.button("🔍 Perform Semantic Analysis"):
                     with st.spinner("Analyzing semantic patterns..."):
                         # Extract successful responses for analysis
                         successful_responses = [r for r in st.session_state.llm_responses if r.get('success', False)]
@@ -531,180 +706,43 @@ def main():
                             if llm_passages:
                                 llm_embeddings = analyzer.generate_embeddings(llm_passages)
                                 
-                                # Analyze patterns across different LLMs
-                                providers = list(set([r['provider'] for r in successful_responses]))
-                                
-                                provider_analysis = {}
-                                for provider in providers:
-                                    provider_responses = [r for r in successful_responses if r['provider'] == provider]
-                                    provider_texts = [r['response'] for r in provider_responses]
-                                    provider_passages = []
+                                if llm_embeddings.size > 0:
+                                    # Analyze patterns across different LLMs
+                                    providers = list(set([r['provider'] for r in successful_responses]))
                                     
-                                    for text in provider_texts:
-                                        passages = analyzer.extract_passages(text, passage_length)
-                                        provider_passages.extend(passages)
-                                    
-                                    if provider_passages:
-                                        provider_embeddings = analyzer.generate_embeddings(provider_passages)
-                                        provider_analysis[provider] = {
-                                            'passages': provider_passages,
-                                            'embeddings': provider_embeddings,
-                                            'avg_response_length': sum(len(t) for t in provider_texts) / len(provider_texts)
-                                        }
-                                
-                                st.session_state.analysis_results = {
-                                    'llm_embeddings': llm_embeddings,
-                                    'llm_passages': llm_passages,
-                                    'provider_analysis': provider_analysis
-                                }
-                                
-                                # Display provider comparison
-                                if len(providers) > 1:
-                                    st.subheader("Provider Comparison")
-                                    
-                                    comparison_data = []
-                                    for provider, data in provider_analysis.items():
-                                        comparison_data.append({
-                                            'Provider': provider,
-                                            'Avg Response Length': data['avg_response_length'],
-                                            'Total Passages': len(data['passages'])
-                                        })
-                                    
-                                    comparison_df = pd.DataFrame(comparison_data)
-                                    st.dataframe(comparison_df)
-                                    
-                                    # Similarity between providers
-                                    if len(providers) == 2:
-                                        provider_names = list(provider_analysis.keys())
-                                        emb1 = provider_analysis[provider_names[0]]['embeddings']
-                                        emb2 = provider_analysis[provider_names[1]]['embeddings']
+                                    provider_analysis = {}
+                                    for provider in providers:
+                                        provider_responses = [r for r in successful_responses if r['provider'] == provider]
+                                        provider_texts = [r['response'] for r in provider_responses]
+                                        provider_passages = []
                                         
-                                        similarities = cosine_similarity(emb1, emb2)
-                                        avg_similarity = np.mean(similarities)
+                                        for text in provider_texts:
+                                            passages = analyzer.extract_passages(text, passage_length)
+                                            provider_passages.extend(passages)
                                         
-                                        st.metric(f"Average Similarity ({provider_names[0]} vs {provider_names[1]})", 
-                                                f"{avg_similarity:.3f}")
-                        else:
-                            st.warning("No successful responses to analyze")
-            
-            # Step 5: Content Optimization Recommendations
-            if st.session_state.analysis_results:
-                st.header("✍️ Step 5: Content Optimization Recommendations")
-                
-                # Generate recommendations based on analysis
-                recommendations = []
-                
-                for i, row in df.iterrows():
-                    query = row['query']
-                    intent_cat = intent_analysis[i]['intent_category']
-                    strategies = intent_analysis[i]['optimization_strategy']
-                    
-                    # Find relevant LLM responses for this query
-                    relevant_responses = [r for r in st.session_state.llm_responses 
-                                        if r['query'] == query and r.get('success', False)]
-                    
-                    recommendation = {
-                        'query': query,
-                        'intent_category': intent_cat,
-                        'strategies': strategies,
-                        'llm_insights': len(relevant_responses),
-                        'priority': 'High' if intent_cat in ['Transactional', 'Commercial Investigation'] else 'Medium'
-                    }
-                    recommendations.append(recommendation)
-                
-                # Display recommendations
-                rec_df = pd.DataFrame(recommendations)
-                st.dataframe(rec_df)
-                
-                # Detailed recommendations
-                st.subheader("Detailed Optimization Plan")
-                
-                selected_query_idx = st.selectbox(
-                    "Select query for detailed recommendations:",
-                    range(len(recommendations)),
-                    format_func=lambda x: recommendations[x]['query']
-                )
-                
-                selected_rec = recommendations[selected_query_idx]
-                
-                st.write(f"**Query:** {selected_rec['query']}")
-                st.write(f"**Intent Category:** {selected_rec['intent_category']}")
-                st.write(f"**Priority:** {selected_rec['priority']}")
-                
-                st.write("**Optimization Strategies:**")
-                for strategy in selected_rec['strategies']:
-                    st.write(f"• {strategy}")
-                
-                # LLM-specific insights
-                query_responses = [r for r in st.session_state.llm_responses 
-                                 if r['query'] == selected_rec['query'] and r.get('success', False)]
-                
-                if query_responses:
-                    st.write("**LLM Response Insights:**")
-                    for response in query_responses:
-                        with st.expander(f"{response['provider']} Response"):
-                            st.write(response['response'][:500] + "..." if len(response['response']) > 500 else response['response'])
-            
-            # Step 6: Export Enhanced Results
-            st.header("💾 Step 6: Export Enhanced Results")
-            
-            if st.button("Generate Comprehensive Report"):
-                # Create detailed report
-                report_data = {
-                    'analysis_timestamp': datetime.now().isoformat(),
-                    'total_queries': len(df),
-                    'intent_distribution': intent_df['intent_category'].value_counts().to_dict(),
-                    'llm_responses': len(st.session_state.llm_responses) if st.session_state.llm_responses else 0,
-                    'successful_responses': len([r for r in st.session_state.llm_responses if r.get('success', False)]) if st.session_state.llm_responses else 0,
-                    'recommendations_generated': len(recommendations) if 'recommendations' in locals() else 0
-                }
-                
-                # Enhanced CSV export
-                enhanced_df = df.copy()
-                
-                # Add intent analysis
-                for i, analysis in enumerate(intent_analysis):
-                    enhanced_df.loc[i, 'intent_category'] = analysis['intent_category']
-                    enhanced_df.loc[i, 'optimization_strategies'] = '; '.join(analysis['optimization_strategy'])
-                
-                # Add LLM response data
-                if st.session_state.llm_responses:
-                    for i, row in enhanced_df.iterrows():
-                        query = row['query']
-                        query_responses = [r for r in st.session_state.llm_responses if r['query'] == query]
-                        
-                        enhanced_df.loc[i, 'llm_responses_count'] = len(query_responses)
-                        enhanced_df.loc[i, 'successful_llm_responses'] = len([r for r in query_responses if r.get('success', False)])
-                        
-                        # Add first successful response
-                        successful_responses = [r for r in query_responses if r.get('success', False)]
-                        if successful_responses:
-                            enhanced_df.loc[i, 'sample_llm_response'] = successful_responses[0]['response'][:500]
-                            enhanced_df.loc[i, 'responding_provider'] = successful_responses[0]['provider']
-                
-                # Download enhanced CSV
-                csv_buffer = StringIO()
-                enhanced_df.to_csv(csv_buffer, index=False)
-                
-                st.download_button(
-                    label="Download Enhanced Analysis CSV",
-                    data=csv_buffer.getvalue(),
-                    file_name=f"enhanced_seo_analysis_{datetime.now().strftime('%Y%m%d_%H%M%S')}.csv",
-                    mime="text/csv"
-                )
-                
-                # Download JSON report
-                json_report = json.dumps(report_data, indent=2)
-                st.download_button(
-                    label="Download JSON Report",
-                    data=json_report,
-                    file_name=f"seo_analysis_report_{datetime.now().strftime('%Y%m%d_%H%M%S')}.json",
-                    mime="application/json"
-                )
-                
-        except Exception as e:
-            st.error(f"Error processing file: {str(e)}")
-            st.write("Please ensure your CSV has the required columns: query, query_type, user_intent, reasoning")
-
-if __name__ == "__main__":
-    main()
+                                        if provider_passages:
+                                            provider_embeddings = analyzer.generate_embeddings(provider_passages)
+                                            if provider_embeddings.size > 0:
+                                                provider_analysis[provider] = {
+                                                    'passages': provider_passages,
+                                                    'embeddings': provider_embeddings,
+                                                    'avg_response_length': sum(len(t) for t in provider_texts) / len(provider_texts)
+                                                }
+                                    
+                                    st.session_state.analysis_results = {
+                                        'llm_embeddings': llm_embeddings,
+                                        'llm_passages': llm_passages,
+                                        'provider_analysis': provider_analysis
+                                    }
+                                    
+                                    # Display provider comparison
+                                    if len(providers) > 1:
+                                        st.subheader("Provider Comparison")
+                                        
+                                        comparison_data = []
+                                        for provider, data in provider_analysis.items():
+                                            comparison_data.append({
+                                                'Provider': provider,
+                                                'Avg Response Length': f"{data['avg_response_length']:.0f} chars",
+                                                'Total Passages': len(data['passages'])
+                                            })
