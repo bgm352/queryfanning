@@ -9,15 +9,13 @@ import plotly.graph_objects as go
 from io import StringIO
 import re
 from typing import List, Dict, Tuple
-import asyncio
-import aiohttp
 import json
 from datetime import datetime
 import time
 import google.generativeai as genai
 import openai
-from concurrent.futures import ThreadPoolExecutor
 import requests
+from bs4 import BeautifulSoup
 
 # Download required NLTK data
 try:
@@ -107,7 +105,6 @@ class LLMCrawler:
                 "x-api-key": api_key,
                 "anthropic-version": "2023-06-01"
             }
-            
             data = {
                 "model": "claude-3-sonnet-20240229",
                 "max_tokens": 1500,
@@ -115,14 +112,12 @@ class LLMCrawler:
                     {"role": "user", "content": query}
                 ]
             }
-            
             response = requests.post(
                 "https://api.anthropic.com/v1/messages",
                 headers=headers,
                 json=data,
                 timeout=30
             )
-            
             if response.status_code == 200:
                 result = response.json()
                 return {
@@ -321,7 +316,67 @@ class SEOAnalyzer:
             analysis['response_quality_score'] = (success_rate + avg_length_score) / 2
         return analysis
 
-# Example usage in Streamlit app:
+# --- New Section: Passage Relevance Engineering ---
+
+def extract_passages_from_url(url, max_length=200):
+    """Extract and clean passages from a URL."""
+    try:
+        resp = requests.get(url, timeout=10)
+        soup = BeautifulSoup(resp.text, 'html.parser')
+        for tag in soup(['script', 'style', 'noscript']):
+            tag.decompose()
+        text = soup.get_text(separator=' ')
+        sentences = re.split(r'(?<=[.!?]) +', text)
+        passages = []
+        current = ''
+        for sent in sentences:
+            if len(current) + len(sent) < max_length:
+                current += ' ' + sent
+            else:
+                if current.strip():
+                    passages.append(current.strip())
+                current = sent
+        if current.strip():
+            passages.append(current.strip())
+        passages = [p for p in passages if len(p) > 40]
+        return passages
+    except Exception as e:
+        st.warning(f"Could not extract from {url}: {e}")
+        return []
+
+def vectorize_passages(passages, model):
+    return model.encode(passages)
+
+def score_passages(query, passages, model):
+    query_vec = model.encode([query])
+    passage_vecs = model.encode(passages)
+    scores = cosine_similarity(query_vec, passage_vecs)[0]
+    return list(zip(passages, scores))
+
+def suggest_optimized_passage(query, top_competitor_passage, your_passage, openai_key):
+    if not openai_key:
+        return "OpenAI key required for optimization."
+    prompt = (
+        f"Query: {query}\n\n"
+        f"Competitor's top passage:\n{top_competitor_passage}\n\n"
+        f"Your current passage:\n{your_passage}\n\n"
+        "Rewrite your passage to be more relevant to the query and competitive with the top passage, "
+        "while maintaining your unique voice and accuracy."
+    )
+    client = openai.OpenAI(api_key=openai_key)
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are an expert SEO content editor."},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=500,
+        temperature=0.7
+    )
+    return response.choices[0].message.content.strip()
+
+# --- Streamlit App Main ---
+
 def main():
     st.set_page_config(
         page_title="Advanced SEO AI Citations Analyzer",
@@ -390,6 +445,48 @@ def main():
                 st.json(analysis)
         except Exception as e:
             st.error(f"Error loading or processing CSV: {str(e)}")
+
+    # ------------- New Section: Passage Relevance Engineering -------------
+    st.header("Passage Relevance Engineering")
+    query = st.text_input("Enter your target query:")
+    your_url = st.text_input("Enter your URL (your page):")
+    competitor_urls = st.text_area("Enter competitor URLs (one per line):")
+    openai_key2 = st.text_input("OpenAI API Key (for optimization)", type="password", key="openai_key2")
+
+    if st.button("Extract and Score Passages"):
+        if not query or not your_url or not competitor_urls:
+            st.warning("Please provide a query, your URL, and at least one competitor URL.")
+        else:
+            model = SentenceTransformer('all-MiniLM-L6-v2')
+            # Your passages
+            your_passages = extract_passages_from_url(your_url)
+            st.subheader("Your Passages")
+            st.write(your_passages)
+            # Competitor passages
+            comp_urls = [u.strip() for u in competitor_urls.splitlines() if u.strip()]
+            comp_passages = []
+            for url in comp_urls:
+                passages = extract_passages_from_url(url)
+                comp_passages.extend(passages)
+            st.subheader("Competitor Passages")
+            st.write(comp_passages[:10])  # Show only first 10 for brevity
+            # Score your passages
+            your_scores = score_passages(query, your_passages, model)
+            comp_scores = score_passages(query, comp_passages, model)
+            # Show top passages
+            your_top = sorted(your_scores, key=lambda x: -x[1])[0] if your_scores else ("", 0)
+            comp_top = sorted(comp_scores, key=lambda x: -x[1])[0] if comp_scores else ("", 0)
+            st.markdown(f"**Your top passage (score {your_top[1]:.2f}):**\n\n{your_top[0]}")
+            st.markdown(f"**Competitor's top passage (score {comp_top[1]:.2f}):**\n\n{comp_top[0]}")
+            # Optimization
+            if st.button("Suggest Optimized Passage"):
+                optimized = suggest_optimized_passage(query, comp_top[0], your_top[0], openai_key2)
+                st.markdown("**Optimized Passage Suggestion:**")
+                st.write(optimized)
+                # Allow iterative improvement
+                if st.button("Re-score Optimized Passage"):
+                    opt_score = score_passages(query, [optimized], model)[0][1]
+                    st.markdown(f"**Optimized Passage Score:** {opt_score:.2f}")
 
 if __name__ == "__main__":
     main()
