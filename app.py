@@ -1,70 +1,33 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-import requests
+from sentence_transformers import SentenceTransformer
+import nltk
+from sklearn.metrics.pairwise import cosine_similarity
+import plotly.express as px
+import plotly.graph_objects as go
 import re
-import json
+from typing import List, Dict, Tuple, Optional
 from datetime import datetime
 import time
-from typing import List, Dict, Tuple
+import google.generativeai as genai
+import openai
+import requests
 
-# Optional imports with graceful fallback
-try:
-    from sentence_transformers import SentenceTransformer
-    SENTENCE_TRANSFORMERS_AVAILABLE = True
-except ImportError:
-    SENTENCE_TRANSFORMERS_AVAILABLE = False
-    st.error("sentence-transformers not installed. Some features will be disabled.")
-
-try:
-    import nltk
-    NLTK_AVAILABLE = True
-    try:
-        nltk.data.find('tokenizers/punkt')
-    except LookupError:
-        try:
-            nltk.download('punkt')
-        except:
-            st.warning("Could not download NLTK punkt tokenizer. Text processing may be limited.")
-except ImportError:
-    NLTK_AVAILABLE = False
-    st.warning("NLTK not available. Using basic text processing.")
-
-try:
-    from sklearn.metrics.pairwise import cosine_similarity
-    SKLEARN_AVAILABLE = True
-except ImportError:
-    SKLEARN_AVAILABLE = False
-    st.warning("scikit-learn not available. Semantic analysis will be disabled.")
-
-try:
-    import plotly.express as px
-    import plotly.graph_objects as go
-    PLOTLY_AVAILABLE = True
-except ImportError:
-    PLOTLY_AVAILABLE = False
-    st.warning("Plotly not available. Using basic charts.")
-
-try:
-    import google.generativeai as genai
-    GEMINI_AVAILABLE = True
-except ImportError:
-    GEMINI_AVAILABLE = False
-
-try:
-    import openai
-    OPENAI_AVAILABLE = True
-except ImportError:
-    OPENAI_AVAILABLE = False
-
+# Safe import for BeautifulSoup
 try:
     from bs4 import BeautifulSoup
     BEAUTIFULSOUP_AVAILABLE = True
 except ImportError:
     BEAUTIFULSOUP_AVAILABLE = False
-    st.error("beautifulsoup4 not installed. Passage extraction from URLs will be disabled.")
+    st.warning("beautifulsoup4 not installed. Passage extraction from URLs will be disabled.")
 
-# Initialize session state
+# Download required NLTK data
+try:
+    nltk.data.find('tokenizers/punkt')
+except LookupError:
+    nltk.download('punkt')
+
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 if 'llm_responses' not in st.session_state:
@@ -73,7 +36,6 @@ if 'analysis_results' not in st.session_state:
     st.session_state.analysis_results = None
 
 def load_queries_from_csv(file) -> List[Dict]:
-    """Load queries from CSV with 'query' and 'type' columns"""
     df = pd.read_csv(file)
     required_columns = {'query', 'type'}
     if not required_columns.issubset(df.columns):
@@ -84,18 +46,8 @@ def load_queries_from_csv(file) -> List[Dict]:
 class LLMCrawler:
     def __init__(self):
         self.responses = {}
-        
+
     def query_openai(self, query: str, api_key: str) -> Dict:
-        """Query OpenAI GPT"""
-        if not OPENAI_AVAILABLE:
-            return {
-                "provider": "OpenAI GPT-4",
-                "query": query,
-                "response": "",
-                "success": False,
-                "error": "OpenAI library not available",
-                "timestamp": datetime.now().isoformat()
-            }
         try:
             client = openai.OpenAI(api_key=api_key)
             response = client.chat.completions.create(
@@ -123,18 +75,8 @@ class LLMCrawler:
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }
-    
+
     def query_gemini(self, query: str, api_key: str) -> Dict:
-        """Query Google Gemini"""
-        if not GEMINI_AVAILABLE:
-            return {
-                "provider": "Google Gemini",
-                "query": query,
-                "response": "",
-                "success": False,
-                "error": "Google Generative AI library not available",
-                "timestamp": datetime.now().isoformat()
-            }
         try:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-pro')
@@ -155,9 +97,8 @@ class LLMCrawler:
                 "error": str(e),
                 "timestamp": datetime.now().isoformat()
             }
-    
+
     def query_claude(self, query: str, api_key: str) -> Dict:
-        """Query Anthropic Claude"""
         try:
             headers = {
                 "Content-Type": "application/json",
@@ -205,9 +146,7 @@ class LLMCrawler:
                 "timestamp": datetime.now().isoformat()
             }
 
-    def crawl_multiple_llms(self, queries: List[Dict], api_keys: Dict[str, str], 
-                           delay_between_requests: float = 1.0) -> List[Dict]:
-        """Crawl multiple LLMs with rate limiting and query/type pairs"""
+    def crawl_multiple_llms(self, queries: List[Dict], api_keys: Dict[str, str], delay_between_requests: float = 1.0) -> List[Dict]:
         all_responses = []
         for q in queries:
             query_text = q['query']
@@ -241,29 +180,15 @@ class SEOAnalyzer:
     def __init__(self):
         self.model = None
         self.embeddings = None
-        
+
     @st.cache_resource
     def load_model(_self):
-        """Load sentence transformer model"""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            return None
-        try:
-            return SentenceTransformer('all-MiniLM-L6-v2')
-        except Exception as e:
-            st.error(f"Failed to load sentence transformer model: {e}")
-            return None
-    
+        return SentenceTransformer('all-MiniLM-L6-v2')
+
     def extract_passages(self, text: str, max_length: int = 200) -> List[str]:
-        """Break content into passages"""
         if not text or pd.isna(text):
             return []
-        if NLTK_AVAILABLE:
-            try:
-                sentences = nltk.sent_tokenize(str(text))
-            except:
-                sentences = self._basic_sentence_split(str(text))
-        else:
-            sentences = self._basic_sentence_split(str(text))
+        sentences = nltk.sent_tokenize(str(text))
         passages = []
         current_passage = ""
         for sentence in sentences:
@@ -276,96 +201,13 @@ class SEOAnalyzer:
         if current_passage:
             passages.append(current_passage.strip())
         return passages
-    
-    def _basic_sentence_split(self, text: str) -> List[str]:
-        """Basic sentence splitting when NLTK is not available"""
-        sentences = re.split(r'[.!?]+\s+', text)
-        return [s.strip() for s in sentences if s.strip()]
-    
+
     def generate_embeddings(self, texts: List[str]) -> Optional[np.ndarray]:
-        """Generate embeddings for text passages"""
-        if not SENTENCE_TRANSFORMERS_AVAILABLE:
-            st.warning("Sentence transformers not available. Skipping embedding generation.")
-            return None
         if not self.model:
             self.model = self.load_model()
-        if self.model is None:
-            return None
-        try:
-            return self.model.encode(texts)
-        except Exception as e:
-            st.error(f"Error generating embeddings: {e}")
-            return None
-    
-    def analyze_user_intent(self, query: str, intent: str, reasoning: str) -> Dict:
-        """Analyze user intent and provide insights"""
-        intent_analysis = {
-            'query': query,
-            'declared_intent': intent,
-            'reasoning': reasoning,
-            'intent_category': self.categorize_intent(intent),
-            'optimization_strategy': self.get_optimization_strategy(intent)
-        }
-        return intent_analysis
-    
-    def categorize_intent(self, intent: str) -> str:
-        """Categorize user intent"""
-        intent_lower = intent.lower()
-        if any(word in intent_lower for word in ['buy', 'purchase', 'price', 'cost', 'deal']):
-            return 'Transactional'
-        elif any(word in intent_lower for word in ['how', 'what', 'why', 'when', 'where', 'guide', 'tutorial']):
-            return 'Informational'
-        elif any(word in intent_lower for word in ['best', 'vs', 'compare', 'review', 'top']):
-            return 'Commercial Investigation'
-        elif any(word in intent_lower for word in ['near', 'location', 'address', 'directions']):
-            return 'Local'
-        else:
-            return 'Informational'
-    
-    def get_optimization_strategy(self, intent: str) -> List[str]:
-        """Get optimization strategies based on intent"""
-        intent_lower = intent.lower()
-        strategies = []
-        if 'informational' in intent_lower or any(word in intent_lower for word in ['how', 'what', 'guide']):
-            strategies.extend([
-                "Create comprehensive, step-by-step content",
-                "Use FAQ format for common questions",
-                "Include relevant examples and case studies",
-                "Structure with clear headings and subheadings"
-            ])
-        if 'transactional' in intent_lower or any(word in intent_lower for word in ['buy', 'purchase']):
-            strategies.extend([
-                "Include product specifications and comparisons",
-                "Add pricing information and availability",
-                "Include customer reviews and testimonials",
-                "Optimize for commercial keywords"
-            ])
-        if 'comparison' in intent_lower or 'vs' in intent_lower:
-            strategies.extend([
-                "Create detailed comparison tables",
-                "Highlight pros and cons",
-                "Include objective evaluation criteria",
-                "Add visual comparisons where possible"
-            ])
-        return strategies if strategies else ["Focus on comprehensive, accurate information"]
-    
-    def find_semantic_gaps(self, target_embeddings: np.ndarray, 
-                          content_embeddings: np.ndarray, 
-                          threshold: float = 0.7) -> List[int]:
-        """Find content gaps using cosine similarity"""
-        if not SKLEARN_AVAILABLE or target_embeddings is None or content_embeddings is None:
-            return []
-        try:
-            similarities = cosine_similarity(target_embeddings, content_embeddings)
-            max_similarities = np.max(similarities, axis=1)
-            gaps = np.where(max_similarities < threshold)[0]
-            return gaps.tolist()
-        except Exception as e:
-            st.error(f"Error in semantic gap analysis: {e}")
-            return []
-    
+        return self.model.encode(texts)
+
     def analyze_llm_responses(self, responses: List[Dict]) -> Dict:
-        """Analyze LLM responses for patterns and insights, grouped by type"""
         analysis = {
             'total_responses': len(responses),
             'successful_responses': len([r for r in responses if r.get('success', False)]),
@@ -406,12 +248,10 @@ class SEOAnalyzer:
             analysis['response_quality_score'] = (success_rate + avg_length_score) / 2
         return analysis
 
-# --- New Section: Passage Relevance Engineering ---
-
+# --- Passage Extraction from URLs ---
 def extract_passages_from_url(url, max_length=200):
-    """Extract and clean passages from a URL."""
     if not BEAUTIFULSOUP_AVAILABLE:
-        st.error("beautifulsoup4 not installed. Cannot extract passages from URLs.")
+        st.warning("beautifulsoup4 not installed. Cannot extract passages from URLs.")
         return []
     try:
         resp = requests.get(url, timeout=10)
@@ -437,24 +277,13 @@ def extract_passages_from_url(url, max_length=200):
         st.warning(f"Could not extract from {url}: {e}")
         return []
 
-def vectorize_passages(passages, model):
-    if not SENTENCE_TRANSFORMERS_AVAILABLE:
-        st.error("sentence-transformers not installed. Cannot vectorize passages.")
-        return []
-    return model.encode(passages)
-
 def score_passages(query, passages, model):
-    if not SENTENCE_TRANSFORMERS_AVAILABLE or not SKLEARN_AVAILABLE:
-        st.error("Required libraries (sentence-transformers, scikit-learn) not installed. Cannot score passages.")
-        return []
     query_vec = model.encode([query])
     passage_vecs = model.encode(passages)
     scores = cosine_similarity(query_vec, passage_vecs)[0]
     return list(zip(passages, scores))
 
 def suggest_optimized_passage(query, top_competitor_passage, your_passage, openai_key):
-    if not OPENAI_AVAILABLE:
-        return "OpenAI library not available for optimization."
     if not openai_key:
         return "OpenAI key required for optimization."
     prompt = (
@@ -464,22 +293,17 @@ def suggest_optimized_passage(query, top_competitor_passage, your_passage, opena
         "Rewrite your passage to be more relevant to the query and competitive with the top passage, "
         "while maintaining your unique voice and accuracy."
     )
-    try:
-        client = openai.OpenAI(api_key=openai_key)
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are an expert SEO content editor."},
-                {"role": "user", "content": prompt}
-            ],
-            max_tokens=500,
-            temperature=0.7
-        )
-        return response.choices[0].message.content.strip()
-    except Exception as e:
-        return f"Error generating optimized passage: {str(e)}"
-
-# --- Streamlit App Main ---
+    client = openai.OpenAI(api_key=openai_key)
+    response = client.chat.completions.create(
+        model="gpt-4",
+        messages=[
+            {"role": "system", "content": "You are an expert SEO content editor."},
+            {"role": "user", "content": prompt}
+        ],
+        max_tokens=500,
+        temperature=0.7
+    )
+    return response.choices[0].message.content.strip()
 
 def main():
     st.set_page_config(
@@ -550,7 +374,6 @@ def main():
         except Exception as e:
             st.error(f"Error loading or processing CSV: {str(e)}")
 
-    # ------------- New Section: Passage Relevance Engineering -------------
     st.header("Passage Relevance Engineering")
     query = st.text_input("Enter your target query:")
     your_url = st.text_input("Enter your URL (your page):")
@@ -561,36 +384,27 @@ def main():
         if not query or not your_url or not competitor_urls:
             st.warning("Please provide a query, your URL, and at least one competitor URL.")
         else:
-            model = analyzer.load_model()
-            if model is None:
-                st.error("Cannot load embedding model. Please check installation.")
-                return
-            # Your passages
+            model = SentenceTransformer('all-MiniLM-L6-v2')
             your_passages = extract_passages_from_url(your_url)
             st.subheader("Your Passages")
             st.write(your_passages)
-            # Competitor passages
             comp_urls = [u.strip() for u in competitor_urls.splitlines() if u.strip()]
             comp_passages = []
             for url in comp_urls:
                 passages = extract_passages_from_url(url)
                 comp_passages.extend(passages)
             st.subheader("Competitor Passages")
-            st.write(comp_passages[:10])  # Show only first 10 for brevity
-            # Score your passages
+            st.write(comp_passages[:10])
             your_scores = score_passages(query, your_passages, model)
             comp_scores = score_passages(query, comp_passages, model)
-            # Show top passages
             your_top = sorted(your_scores, key=lambda x: -x[1])[0] if your_scores else ("", 0)
             comp_top = sorted(comp_scores, key=lambda x: -x[1])[0] if comp_scores else ("", 0)
             st.markdown(f"**Your top passage (score {your_top[1]:.2f}):**\n\n{your_top[0]}")
             st.markdown(f"**Competitor's top passage (score {comp_top[1]:.2f}):**\n\n{comp_top[0]}")
-            # Optimization
             if st.button("Suggest Optimized Passage"):
                 optimized = suggest_optimized_passage(query, comp_top[0], your_top[0], openai_key2)
                 st.markdown("**Optimized Passage Suggestion:**")
                 st.write(optimized)
-                # Allow iterative improvement
                 if st.button("Re-score Optimized Passage"):
                     opt_score = score_passages(query, [optimized], model)[0][1]
                     st.markdown(f"**Optimized Passage Score:** {opt_score:.2f}")
