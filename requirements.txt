@@ -1,0 +1,11 @@
+streamlit
+pandas
+numpy
+sentence-transformers
+nltk
+scikit-learn
+plotly
+google-generativeai
+openai
+requests
+aiohttp
