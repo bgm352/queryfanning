@@ -1,9 +1,11 @@
 import streamlit as st
 import pandas as pd
+import numpy as np
 from sentence_transformers import SentenceTransformer
 from sklearn.metrics.pairwise import cosine_similarity
 import requests
 import re
+from typing import List, Dict, Optional
 from bs4 import BeautifulSoup
 
 # --- Configuration ---
@@ -176,6 +178,7 @@ def main():
 
 if __name__ == "__main__":
     main()
+
 
 
 
