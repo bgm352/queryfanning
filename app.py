@@ -1,27 +1,68 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
-from sentence_transformers import SentenceTransformer
-import nltk
-from sklearn.metrics.pairwise import cosine_similarity
-import plotly.express as px
-import plotly.graph_objects as go
-from io import StringIO
+import requests
 import re
-from typing import List, Dict, Tuple
 import json
 from datetime import datetime
 import time
-import google.generativeai as genai
-import openai
-import requests
-from bs4 import BeautifulSoup
+from typing import List, Dict, Tuple
 
-# Download required NLTK data
+# Optional imports with graceful fallback
 try:
-    nltk.data.find('tokenizers/punkt')
-except LookupError:
-    nltk.download('punkt')
+    from sentence_transformers import SentenceTransformer
+    SENTENCE_TRANSFORMERS_AVAILABLE = True
+except ImportError:
+    SENTENCE_TRANSFORMERS_AVAILABLE = False
+    st.error("sentence-transformers not installed. Some features will be disabled.")
+
+try:
+    import nltk
+    NLTK_AVAILABLE = True
+    try:
+        nltk.data.find('tokenizers/punkt')
+    except LookupError:
+        try:
+            nltk.download('punkt')
+        except:
+            st.warning("Could not download NLTK punkt tokenizer. Text processing may be limited.")
+except ImportError:
+    NLTK_AVAILABLE = False
+    st.warning("NLTK not available. Using basic text processing.")
+
+try:
+    from sklearn.metrics.pairwise import cosine_similarity
+    SKLEARN_AVAILABLE = True
+except ImportError:
+    SKLEARN_AVAILABLE = False
+    st.warning("scikit-learn not available. Semantic analysis will be disabled.")
+
+try:
+    import plotly.express as px
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except ImportError:
+    PLOTLY_AVAILABLE = False
+    st.warning("Plotly not available. Using basic charts.")
+
+try:
+    import google.generativeai as genai
+    GEMINI_AVAILABLE = True
+except ImportError:
+    GEMINI_AVAILABLE = False
+
+try:
+    import openai
+    OPENAI_AVAILABLE = True
+except ImportError:
+    OPENAI_AVAILABLE = False
+
+try:
+    from bs4 import BeautifulSoup
+    BEAUTIFULSOUP_AVAILABLE = True
+except ImportError:
+    BEAUTIFULSOUP_AVAILABLE = False
+    st.error("beautifulsoup4 not installed. Passage extraction from URLs will be disabled.")
 
 # Initialize session state
 if 'processed_data' not in st.session_state:
@@ -46,6 +87,15 @@ class LLMCrawler:
         
     def query_openai(self, query: str, api_key: str) -> Dict:
         """Query OpenAI GPT"""
+        if not OPENAI_AVAILABLE:
+            return {
+                "provider": "OpenAI GPT-4",
+                "query": query,
+                "response": "",
+                "success": False,
+                "error": "OpenAI library not available",
+                "timestamp": datetime.now().isoformat()
+            }
         try:
             client = openai.OpenAI(api_key=api_key)
             response = client.chat.completions.create(
@@ -76,6 +126,15 @@ class LLMCrawler:
     
     def query_gemini(self, query: str, api_key: str) -> Dict:
         """Query Google Gemini"""
+        if not GEMINI_AVAILABLE:
+            return {
+                "provider": "Google Gemini",
+                "query": query,
+                "response": "",
+                "success": False,
+                "error": "Google Generative AI library not available",
+                "timestamp": datetime.now().isoformat()
+            }
         try:
             genai.configure(api_key=api_key)
             model = genai.GenerativeModel('gemini-pro')
@@ -186,13 +245,25 @@ class SEOAnalyzer:
     @st.cache_resource
     def load_model(_self):
         """Load sentence transformer model"""
-        return SentenceTransformer('all-MiniLM-L6-v2')
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            return None
+        try:
+            return SentenceTransformer('all-MiniLM-L6-v2')
+        except Exception as e:
+            st.error(f"Failed to load sentence transformer model: {e}")
+            return None
     
     def extract_passages(self, text: str, max_length: int = 200) -> List[str]:
         """Break content into passages"""
         if not text or pd.isna(text):
             return []
-        sentences = nltk.sent_tokenize(str(text))
+        if NLTK_AVAILABLE:
+            try:
+                sentences = nltk.sent_tokenize(str(text))
+            except:
+                sentences = self._basic_sentence_split(str(text))
+        else:
+            sentences = self._basic_sentence_split(str(text))
         passages = []
         current_passage = ""
         for sentence in sentences:
@@ -206,11 +277,25 @@ class SEOAnalyzer:
             passages.append(current_passage.strip())
         return passages
     
-    def generate_embeddings(self, texts: List[str]) -> np.ndarray:
+    def _basic_sentence_split(self, text: str) -> List[str]:
+        """Basic sentence splitting when NLTK is not available"""
+        sentences = re.split(r'[.!?]+\s+', text)
+        return [s.strip() for s in sentences if s.strip()]
+    
+    def generate_embeddings(self, texts: List[str]) -> Optional[np.ndarray]:
         """Generate embeddings for text passages"""
+        if not SENTENCE_TRANSFORMERS_AVAILABLE:
+            st.warning("Sentence transformers not available. Skipping embedding generation.")
+            return None
         if not self.model:
             self.model = self.load_model()
-        return self.model.encode(texts)
+        if self.model is None:
+            return None
+        try:
+            return self.model.encode(texts)
+        except Exception as e:
+            st.error(f"Error generating embeddings: {e}")
+            return None
     
     def analyze_user_intent(self, query: str, intent: str, reasoning: str) -> Dict:
         """Analyze user intent and provide insights"""
@@ -268,10 +353,16 @@ class SEOAnalyzer:
                           content_embeddings: np.ndarray, 
                           threshold: float = 0.7) -> List[int]:
         """Find content gaps using cosine similarity"""
-        similarities = cosine_similarity(target_embeddings, content_embeddings)
-        max_similarities = np.max(similarities, axis=1)
-        gaps = np.where(max_similarities < threshold)[0]
-        return gaps.tolist()
+        if not SKLEARN_AVAILABLE or target_embeddings is None or content_embeddings is None:
+            return []
+        try:
+            similarities = cosine_similarity(target_embeddings, content_embeddings)
+            max_similarities = np.max(similarities, axis=1)
+            gaps = np.where(max_similarities < threshold)[0]
+            return gaps.tolist()
+        except Exception as e:
+            st.error(f"Error in semantic gap analysis: {e}")
+            return []
     
     def analyze_llm_responses(self, responses: List[Dict]) -> Dict:
         """Analyze LLM responses for patterns and insights, grouped by type"""
@@ -287,7 +378,6 @@ class SEOAnalyzer:
         }
         successful_responses = [r for r in responses if r.get('success', False)]
         if successful_responses:
-            # Type-specific metrics
             type_groups = {}
             for resp in successful_responses:
                 q_type = resp.get('type', 'unknown')
@@ -320,6 +410,9 @@ class SEOAnalyzer:
 
 def extract_passages_from_url(url, max_length=200):
     """Extract and clean passages from a URL."""
+    if not BEAUTIFULSOUP_AVAILABLE:
+        st.error("beautifulsoup4 not installed. Cannot extract passages from URLs.")
+        return []
     try:
         resp = requests.get(url, timeout=10)
         soup = BeautifulSoup(resp.text, 'html.parser')
@@ -345,15 +438,23 @@ def extract_passages_from_url(url, max_length=200):
         return []
 
 def vectorize_passages(passages, model):
+    if not SENTENCE_TRANSFORMERS_AVAILABLE:
+        st.error("sentence-transformers not installed. Cannot vectorize passages.")
+        return []
     return model.encode(passages)
 
 def score_passages(query, passages, model):
+    if not SENTENCE_TRANSFORMERS_AVAILABLE or not SKLEARN_AVAILABLE:
+        st.error("Required libraries (sentence-transformers, scikit-learn) not installed. Cannot score passages.")
+        return []
     query_vec = model.encode([query])
     passage_vecs = model.encode(passages)
     scores = cosine_similarity(query_vec, passage_vecs)[0]
     return list(zip(passages, scores))
 
 def suggest_optimized_passage(query, top_competitor_passage, your_passage, openai_key):
+    if not OPENAI_AVAILABLE:
+        return "OpenAI library not available for optimization."
     if not openai_key:
         return "OpenAI key required for optimization."
     prompt = (
@@ -363,17 +464,20 @@ def suggest_optimized_passage(query, top_competitor_passage, your_passage, opena
         "Rewrite your passage to be more relevant to the query and competitive with the top passage, "
         "while maintaining your unique voice and accuracy."
     )
-    client = openai.OpenAI(api_key=openai_key)
-    response = client.chat.completions.create(
-        model="gpt-4",
-        messages=[
-            {"role": "system", "content": "You are an expert SEO content editor."},
-            {"role": "user", "content": prompt}
-        ],
-        max_tokens=500,
-        temperature=0.7
-    )
-    return response.choices[0].message.content.strip()
+    try:
+        client = openai.OpenAI(api_key=openai_key)
+        response = client.chat.completions.create(
+            model="gpt-4",
+            messages=[
+                {"role": "system", "content": "You are an expert SEO content editor."},
+                {"role": "user", "content": prompt}
+            ],
+            max_tokens=500,
+            temperature=0.7
+        )
+        return response.choices[0].message.content.strip()
+    except Exception as e:
+        return f"Error generating optimized passage: {str(e)}"
 
 # --- Streamlit App Main ---
 
@@ -457,7 +561,10 @@ def main():
         if not query or not your_url or not competitor_urls:
             st.warning("Please provide a query, your URL, and at least one competitor URL.")
         else:
-            model = SentenceTransformer('all-MiniLM-L6-v2')
+            model = analyzer.load_model()
+            if model is None:
+                st.error("Cannot load embedding model. Please check installation.")
+                return
             # Your passages
             your_passages = extract_passages_from_url(your_url)
             st.subheader("Your Passages")
@@ -490,3 +597,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+
