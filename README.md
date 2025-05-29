@@ -29,7 +29,3 @@ This application is a powerful tool for analyzing how different AI language mode
   - `requests`
 
   *Note: Optional imports are handled gracefully if some libraries are missing.*
-
-## Installation
-
-1. **Clone the repository:**
