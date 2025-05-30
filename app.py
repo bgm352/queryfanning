@@ -197,13 +197,25 @@ def main():
         st.markdown(f"🔹 **Actual Number of Queries Generated:** {len(queries)}")
         st.markdown("---")
 
+        # Build DataFrame with extra columns
+        analyzer = QueryAnalyzer()
+        rows = []
+        for q in queries:
+            analysis = analyzer.analyze_query_intent(q)
+            row = {
+                "query": q,
+                "type": analysis['primary_intent'],
+                "user_inten": analysis['primary_intent'],
+                "reasoning": f"Detected intent: {analysis['primary_intent']}, confidence: {analysis['intent_confidence']:.2f}"
+            }
+            rows.append(row)
+        df_queries = pd.DataFrame(rows, columns=["query", "type", "user_inten", "reasoning"])
+
         st.markdown("#### Generated Queries")
-        df_queries = pd.DataFrame({'Query': queries})
         st.dataframe(df_queries, use_container_width=True)
         csv = df_queries.to_csv(index=False).encode('utf-8')
         st.download_button("Download as CSV", csv, "queries_fanned_out.csv", "text/csv")
 
-        analyzer = QueryAnalyzer()
         content_gaps = analyzer.analyze_content_gaps(queries)
 
         st.markdown("#### Trending Keywords")
