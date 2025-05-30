@@ -5,7 +5,9 @@ sentence-transformers
 nltk
 scikit-learn
 plotly
+matplotlib
+textstat
+wordcloud
 google-generativeai
 openai
 requests
-aiohttp
