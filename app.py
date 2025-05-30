@@ -9,7 +9,6 @@ from sklearn.decomposition import PCA
 import plotly.express as px
 import plotly.graph_objects as go
 from plotly.subplots import make_subplots
-from io import StringIO
 import re
 from typing import List, Dict, Tuple, Set
 import json
@@ -23,18 +22,35 @@ from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 from textstat import flesch_reading_ease, flesch_kincaid_grade
 
-# Download required NLTK data
+# --- Robust NLTK Tokenizer Setup ---
 try:
     nltk.data.find('tokenizers/punkt')
+    punkt_available = True
+except LookupError:
+    punkt_available = False
+
+try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
-    nltk.download('punkt')
     nltk.download('stopwords')
 
 from nltk.corpus import stopwords
-from nltk.tokenize import word_tokenize
+try:
+    from nltk.tokenize import word_tokenize
+except ImportError:
+    word_tokenize = None
 
-# Initialize session state
+def safe_word_tokenize(text):
+    """Try to use nltk word_tokenize, else fallback to split."""
+    if punkt_available and word_tokenize is not None:
+        try:
+            return word_tokenize(text)
+        except LookupError:
+            return text.split()
+    else:
+        return text.split()
+
+# --- Streamlit session state ---
 if 'processed_data' not in st.session_state:
     st.session_state.processed_data = None
 if 'query_clusters' not in st.session_state:
@@ -44,6 +60,7 @@ if 'content_gaps' not in st.session_state:
 if 'serp_analysis' not in st.session_state:
     st.session_state.serp_analysis = None
 
+# --- QueryAnalyzer ---
 class QueryAnalyzer:
     def __init__(self):
         self.model = None
@@ -51,26 +68,24 @@ class QueryAnalyzer:
 
     @st.cache_resource
     def load_model(_self):
-        """Load sentence transformer model"""
         return SentenceTransformer('all-MiniLM-L6-v2')
 
     def extract_keywords(self, text: str, min_length: int = 3) -> List[str]:
-        """Extract keywords from text"""
         if not text or pd.isna(text):
             return []
         text = re.sub(r'[^\w\s]', ' ', text.lower())
-        tokens = word_tokenize(text)
+        tokens = safe_word_tokenize(text)
         keywords = [word for word in tokens if word not in self.stop_words and len(word) >= min_length]
         return keywords
 
     def analyze_query_intent(self, query: str) -> Dict:
-        """Analyze query intent similar to QForia"""
         query_lower = query.lower()
         informational_signals = ['how', 'what', 'why', 'when', 'where', 'who', 'guide', 'tutorial', 'learn', 'explain']
         commercial_signals = ['best', 'top', 'review', 'compare', 'vs', 'versus', 'alternative', 'option']
         transactional_signals = ['buy', 'purchase', 'price', 'cost', 'cheap', 'deal', 'discount', 'shop', 'order']
         navigational_signals = ['login', 'contact', 'about', 'home', 'official', 'website']
         local_signals = ['near', 'location', 'address', 'directions', 'local', 'nearby']
+
         intent_scores = {
             'informational': sum(1 for signal in informational_signals if signal in query_lower),
             'commercial': sum(1 for signal in commercial_signals if signal in query_lower),
@@ -95,12 +110,10 @@ class QueryAnalyzer:
         }
 
     def detect_brand_mentions(self, query: str) -> bool:
-        """Detect if query contains brand mentions"""
         brand_indicators = ['amazon', 'google', 'apple', 'microsoft', 'facebook', 'netflix', 'uber', 'airbnb']
         return any(brand in query.lower() for brand in brand_indicators)
 
     def categorize_query_length(self, word_count: int) -> str:
-        """Categorize query by length"""
         if word_count <= 2:
             return 'Short-tail'
         elif word_count <= 4:
@@ -109,7 +122,6 @@ class QueryAnalyzer:
             return 'Long-tail'
 
     def cluster_queries(self, queries: List[str], n_clusters: int = 5) -> Dict:
-        """Cluster queries by semantic similarity"""
         if not self.model:
             self.model = self.load_model()
         embeddings = self.model.encode(queries)
@@ -144,7 +156,6 @@ class QueryAnalyzer:
         }
 
     def analyze_content_gaps(self, queries: List[str], existing_content: List[str] = None) -> Dict:
-        """Identify content gaps similar to QForia's approach"""
         if not self.model:
             self.model = self.load_model()
         all_keywords = []
@@ -169,6 +180,7 @@ class QueryAnalyzer:
         }
         return gaps
 
+# --- SERPAnalyzer ---
 class SERPAnalyzer:
     def __init__(self):
         self.serp_features = [
@@ -178,7 +190,6 @@ class SERPAnalyzer:
         ]
 
     def analyze_serp_features(self, query: str) -> Dict:
-        """Simulate SERP feature analysis (would integrate with real SERP API)"""
         query_lower = query.lower()
         features = {}
         features['featured_snippets'] = any(q in query_lower for q in ['how', 'what', 'why', 'when'])
@@ -194,12 +205,12 @@ class SERPAnalyzer:
             'serp_complexity': 'High' if sum(features.values()) > 3 else 'Medium' if sum(features.values()) > 1 else 'Low'
         }
 
+# --- ContentOptimizer ---
 class ContentOptimizer:
     def __init__(self):
         pass
 
     def generate_content_suggestions(self, query_analysis: Dict, cluster_info: Dict = None) -> Dict:
-        """Generate content optimization suggestions"""
         query = query_analysis['query']
         intent = query_analysis['primary_intent']
         keywords = query_analysis['keywords']
@@ -262,32 +273,37 @@ class ContentOptimizer:
         priorities.append('Ensure mobile responsiveness')
         return priorities
 
+# --- Main Streamlit App ---
 def main():
     st.set_page_config(
         page_title="QForia-Style SEO Query Analyzer",
         page_icon="🔍",
         layout="wide"
     )
+
     st.title("🔍 QForia-Style SEO Query Analyzer")
     st.markdown("Advanced query analysis tool for understanding search intent and identifying content opportunities")
 
-    # Initialize analyzers
-    query_analyzer = QueryAnalyzer()
-    serp_analyzer = SERPAnalyzer()
-    content_optimizer = ContentOptimizer()
-
     # Sidebar configuration
     st.sidebar.header("⚙️ Configuration")
+    # Gemini API Key Field
+    gemini_api_key = st.sidebar.text_input("Gemini API Key", type="password")
+    if gemini_api_key:
+        genai.configure(api_key=gemini_api_key)
+        st.sidebar.success("Gemini API Key set!")
+
     analysis_mode = st.sidebar.selectbox(
         "Analysis Mode",
         ["Upload CSV", "Manual Entry", "Paste Text"]
     )
+
     n_clusters = st.sidebar.slider(
         "Number of Query Clusters",
         min_value=3,
         max_value=15,
         value=5
     )
+
     min_keyword_freq = st.sidebar.slider(
         "Minimum Keyword Frequency",
         min_value=1,
@@ -298,7 +314,6 @@ def main():
     # Data Input Section
     st.header("📊 Data Input")
     queries = []
-
     if analysis_mode == "Upload CSV":
         uploaded_file = st.file_uploader("Upload your CSV file", type=["csv"])
         if uploaded_file is not None:
@@ -318,6 +333,9 @@ def main():
 
     if queries:
         st.success(f"{len(queries)} queries loaded.")
+        query_analyzer = QueryAnalyzer()
+        serp_analyzer = SERPAnalyzer()
+        content_optimizer = ContentOptimizer()
         # Analyze queries
         cluster_result = query_analyzer.cluster_queries(queries, n_clusters=n_clusters)
         content_gaps = query_analyzer.analyze_content_gaps(queries)
@@ -361,6 +379,5 @@ def main():
 
 if __name__ == "__main__":
     main()
-
 
 
