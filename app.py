@@ -119,7 +119,8 @@ class QueryAnalyzer:
 # --- Gemini Query Generation ---
 def gemini_generate_queries(api_key, seed_query, target_num=14):
     genai.configure(api_key=api_key)
-    model = genai.GenerativeModel("gemini-pro")
+    # Use the correct Gemini model name for the current API version
+    model = genai.GenerativeModel("models/gemini-1.0-pro-latest")
     prompt = (
         f"You are an expert SEO strategist. Given the seed query: '{seed_query}', "
         f"generate {target_num} unique, high-quality search queries that cover reformulations, related queries, "
@@ -127,7 +128,6 @@ def gemini_generate_queries(api_key, seed_query, target_num=14):
         f"Output only the list of queries, one per line."
     )
     response = model.generate_content(prompt)
-    # Parse queries from Gemini output
     queries = [line.strip('-•* \t') for line in response.text.split('\n') if line.strip()]
     queries = [q for q in queries if len(q) > 0]
     return queries[:target_num]
