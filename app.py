@@ -7,25 +7,22 @@ from collections import Counter, defaultdict
 from wordcloud import WordCloud
 import matplotlib.pyplot as plt
 
-# --- Robust NLTK Tokenizer Setup ---
+# NLTK safe setup
 import nltk
 try:
     nltk.data.find('tokenizers/punkt')
     punkt_available = True
 except LookupError:
     punkt_available = False
-
 try:
     nltk.data.find('corpora/stopwords')
 except LookupError:
     nltk.download('stopwords')
-
 from nltk.corpus import stopwords
 try:
     from nltk.tokenize import word_tokenize
 except ImportError:
     word_tokenize = None
-
 def safe_word_tokenize(text):
     if punkt_available and word_tokenize is not None:
         try:
@@ -35,22 +32,21 @@ def safe_word_tokenize(text):
     else:
         return text.split()
 
-# --- Gemini API (Google Generative AI) ---
+# Gemini API
 import google.generativeai as genai
 
-# --- Query Analyzer ---
+def list_gemini_models(api_key):
+    genai.configure(api_key=api_key)
+    return [m.name for m in genai.list_models()]
+
 class QueryAnalyzer:
     def __init__(self):
         self.stop_words = set(stopwords.words('english'))
-
     def extract_keywords(self, text: str, min_length: int = 3) -> List[str]:
-        if not text or pd.isna(text):
-            return []
+        if not text or pd.isna(text): return []
         text = re.sub(r'[^\w\s]', ' ', text.lower())
         tokens = safe_word_tokenize(text)
-        keywords = [word for word in tokens if word not in self.stop_words and len(word) >= min_length]
-        return keywords
-
+        return [word for word in tokens if word not in self.stop_words and len(word) >= min_length]
     def analyze_query_intent(self, query: str) -> Dict:
         query_lower = query.lower()
         informational_signals = ['how', 'what', 'why', 'when', 'where', 'who', 'guide', 'tutorial', 'learn', 'explain']
@@ -80,19 +76,13 @@ class QueryAnalyzer:
             'query_length_category': self.categorize_query_length(word_count),
             'keywords': self.extract_keywords(query)
         }
-
     def detect_brand_mentions(self, query: str) -> bool:
         brand_indicators = ['amazon', 'google', 'apple', 'microsoft', 'facebook', 'netflix', 'uber', 'airbnb']
         return any(brand in query.lower() for brand in brand_indicators)
-
     def categorize_query_length(self, word_count: int) -> str:
-        if word_count <= 2:
-            return 'Short-tail'
-        elif word_count <= 4:
-            return 'Medium-tail'
-        else:
-            return 'Long-tail'
-
+        if word_count <= 2: return 'Short-tail'
+        elif word_count <= 4: return 'Medium-tail'
+        else: return 'Long-tail'
     def analyze_content_gaps(self, queries: List[str]) -> Dict:
         all_keywords = []
         intent_distribution = defaultdict(int)
@@ -116,11 +106,9 @@ class QueryAnalyzer:
         }
         return gaps
 
-# --- Gemini Query Generation ---
-def gemini_generate_queries(api_key, seed_query, target_num=14):
+def gemini_generate_queries(api_key, model_name, seed_query, target_num=14):
     genai.configure(api_key=api_key)
-    # Use the correct Gemini model name for the current API version
-    model = genai.GenerativeModel("models/gemini-1.0-pro-latest")
+    model = genai.GenerativeModel(model_name)
     prompt = (
         f"You are an expert SEO strategist. Given the seed query: '{seed_query}', "
         f"generate {target_num} unique, high-quality search queries that cover reformulations, related queries, "
@@ -132,7 +120,6 @@ def gemini_generate_queries(api_key, seed_query, target_num=14):
     queries = [q for q in queries if len(q) > 0]
     return queries[:target_num]
 
-# --- Streamlit App ---
 def main():
     st.set_page_config(
         page_title="QForia-style Fan Out Tool",
@@ -142,10 +129,25 @@ def main():
     st.title("🧠 QForia-style Fan Out Tool")
     st.markdown("Generate a comprehensive set of search queries from a seed query, just like QForia.")
 
-    # Sidebar for API key
+    # Sidebar for API key and model
     st.sidebar.header("Gemini API Key")
     gemini_api_key = st.sidebar.text_input("Enter your Gemini API key", type="password")
     st.sidebar.markdown("[Get a Gemini API key](https://aistudio.google.com/app/apikey)")
+
+    # List available models
+    available_models = []
+    if gemini_api_key:
+        try:
+            available_models = list_gemini_models(gemini_api_key)
+            st.sidebar.success("Models loaded.")
+        except Exception as e:
+            st.sidebar.error(f"Model list error: {e}")
+
+    model_name = None
+    if available_models:
+        model_name = st.sidebar.selectbox("Select Gemini Model", available_models)
+    else:
+        st.sidebar.info("Enter your API key to see available models.")
 
     # Input section
     st.header("Seed Query or Upload")
@@ -173,12 +175,12 @@ def main():
                 st.error("CSV must have a 'query' column.")
         elif not seed_query:
             st.warning("Please enter a seed query or upload a CSV.")
-        elif not gemini_api_key:
-            st.warning("Please enter your Gemini API key in the sidebar.")
+        elif not gemini_api_key or not model_name:
+            st.warning("Please enter your Gemini API key and select a model.")
         else:
             try:
                 with st.spinner("Generating queries with Gemini..."):
-                    queries = gemini_generate_queries(gemini_api_key, seed_query, target_num)
+                    queries = gemini_generate_queries(gemini_api_key, model_name, seed_query, target_num)
                     plan_reasoning = (
                         f"The user query involves '{seed_query}'. To provide a comprehensive overview, "
                         f"{target_num} queries were generated to cover reformulations, related queries, "
@@ -188,7 +190,6 @@ def main():
                 st.error(f"Gemini API error: {e}")
                 queries = []
 
-    # Show QForia-style output if queries are present
     if queries:
         st.markdown("### 🧠 Model's Query Generation Plan")
         st.markdown(f"🔹 **Target Number of Queries Decided by Model:** {target_num}")
@@ -196,24 +197,18 @@ def main():
         st.markdown(f"🔹 **Actual Number of Queries Generated:** {len(queries)}")
         st.markdown("---")
 
-        # Show queries in a table
         st.markdown("#### Generated Queries")
         df_queries = pd.DataFrame({'Query': queries})
         st.dataframe(df_queries, use_container_width=True)
-
-        # Download button
         csv = df_queries.to_csv(index=False).encode('utf-8')
         st.download_button("Download as CSV", csv, "queries_fanned_out.csv", "text/csv")
 
-        # Analyze queries
         analyzer = QueryAnalyzer()
         content_gaps = analyzer.analyze_content_gaps(queries)
 
-        # Show trending keywords
         st.markdown("#### Trending Keywords")
         st.write([kw for kw, _ in content_gaps['trending_keywords']])
 
-        # Word Cloud
         st.markdown("#### Keyword Word Cloud")
         word_freq = dict(content_gaps['trending_keywords'])
         if word_freq:
@@ -223,11 +218,9 @@ def main():
             ax.axis('off')
             st.pyplot(fig)
 
-        # Intent Distribution
         st.markdown("#### Intent Distribution")
         st.bar_chart(pd.DataFrame.from_dict(content_gaps['intent_distribution'], orient='index', columns=['Count']))
 
-        # Underserved Intents
         st.markdown("#### Underserved Intents")
         st.write(content_gaps['underserved_intents'])
 
