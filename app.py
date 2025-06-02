@@ -184,47 +184,55 @@ def main():
     st.markdown("Generate a comprehensive set of search queries from a seed query using AI models.")
 
     # Sidebar for API configuration
-    st.sidebar.header("AI Model Configuration")
+    st.sidebar.header("🤖 AI Model Configuration")
     
-    # Model selection
-    ai_provider = st.sidebar.radio(
+    # Model selection - make it more prominent
+    st.sidebar.subheader("Choose AI Provider")
+    ai_provider = st.sidebar.selectbox(
         "Select AI Provider",
         options=["Gemini", "OpenAI (ChatGPT)"],
-        help="Choose between Google Gemini or OpenAI's ChatGPT models"
+        help="Choose between Google Gemini or OpenAI's ChatGPT models",
+        index=0
     )
     
+    st.sidebar.markdown("---")
+    
     # API key and model selection based on provider
+    st.sidebar.subheader(f"{ai_provider} Configuration")
+    
     if ai_provider == "Gemini":
-        api_key = st.sidebar.text_input("Enter your Gemini API key", type="password")
-        st.sidebar.markdown("[Get a Gemini API key](https://aistudio.google.com/app/apikey)")
+        api_key = st.sidebar.text_input("Enter your Gemini API key", type="password", key="gemini_key")
+        st.sidebar.markdown("👉 [Get a Gemini API key](https://aistudio.google.com/app/apikey)")
         
         # List available models
         available_models = []
         if api_key:
             try:
                 available_models = list_gemini_models(api_key)
-                st.sidebar.success("Gemini models loaded.")
+                st.sidebar.success("✅ Gemini models loaded.")
             except Exception as e:
-                st.sidebar.error(f"Model list error: {e}")
+                st.sidebar.error(f"❌ Model list error: {e}")
         
         model_name = None
         if available_models:
             model_name = st.sidebar.selectbox("Select Gemini Model", available_models)
         else:
-            st.sidebar.info("Enter your API key to see available models.")
+            st.sidebar.info("ℹ️ Enter your API key to see available models.")
     
-    else:  # OpenAI
-        api_key = st.sidebar.text_input("Enter your OpenAI API key", type="password")
-        st.sidebar.markdown("[Get an OpenAI API key](https://platform.openai.com/api-keys)")
+    elif ai_provider == "OpenAI (ChatGPT)":  # Changed this condition
+        api_key = st.sidebar.text_input("Enter your OpenAI API key", type="password", key="openai_key")
+        st.sidebar.markdown("👉 [Get an OpenAI API key](https://platform.openai.com/api-keys)")
         
         available_models = list_openai_models()
         model_name = st.sidebar.selectbox("Select OpenAI Model", available_models)
         
         if api_key:
-            st.sidebar.success("OpenAI configuration ready.")
+            st.sidebar.success("✅ OpenAI configuration ready.")
+        else:
+            st.sidebar.info("ℹ️ Enter your OpenAI API key above.")
         
         if not openai_available:
-            st.sidebar.error("OpenAI library not installed. Run: pip install openai")
+            st.sidebar.error("❌ OpenAI library not installed. Run: `pip install openai`")
 
     # Input section
     st.header("Seed Query or Upload")
@@ -262,9 +270,9 @@ def main():
                 with st.spinner(f"Generating queries with {ai_provider}..."):
                     if ai_provider == "Gemini":
                         queries = gemini_generate_queries(api_key, model_name, seed_query, target_num)
-                    else:  # OpenAI
+                    else:  # OpenAI (ChatGPT)
                         if not openai_available:
-                            st.error("OpenAI library not available. Install with: pip install openai")
+                            st.error("❌ OpenAI library not available. Install with: `pip install openai`")
                         else:
                             queries = openai_generate_queries(api_key, model_name, seed_query, target_num)
                     
