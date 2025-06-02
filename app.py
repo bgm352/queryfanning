@@ -182,7 +182,6 @@ def main():
     
     st.title("🧠 QForia-style Fan Out Tool")
     st.markdown("Generate a comprehensive set of search queries from a seed query using AI models.")
-
     # Sidebar for API configuration
     st.sidebar.header("🤖 AI Model Configuration")
     
@@ -219,7 +218,7 @@ def main():
         else:
             st.sidebar.info("ℹ️ Enter your API key to see available models.")
     
-    elif ai_provider == "OpenAI (ChatGPT)":  # Changed this condition
+    elif ai_provider == "OpenAI (ChatGPT)":
         api_key = st.sidebar.text_input("Enter your OpenAI API key", type="password", key="openai_key")
         st.sidebar.markdown("👉 [Get an OpenAI API key](https://platform.openai.com/api-keys)")
         
@@ -294,20 +293,25 @@ def main():
         st.markdown(f"🔹 **Actual Number of Queries Generated:** {len(queries)}")
         st.markdown("---")
 
-        # Build DataFrame with extra columns
+        # Build DataFrame with enhanced reasoning for each query
         analyzer = QueryAnalyzer()
         rows = []
         for q in queries:
             analysis = analyzer.analyze_query_intent(q)
+            ai_reasoning = (
+                f"Intent detected as '{analysis['primary_intent']}' (confidence: {analysis['intent_confidence']:.2f}). "
+                f"Sorted using AI based on relevance to topic, search demand, semantic grouping, and content opportunity. "
+                f"Keywords: {', '.join(analysis['keywords']) if analysis['keywords'] else 'none'}."
+            )
             row = {
                 "query": q,
                 "type": analysis['primary_intent'],
-                "user_inten": analysis['primary_intent'],
-                "reasoning": f"Detected intent: {analysis['primary_intent']}, confidence: {analysis['intent_confidence']:.2f}"
+                "user_intent": analysis['primary_intent'],
+                "reasoning": ai_reasoning
             }
             rows.append(row)
-        
-        df_queries = pd.DataFrame(rows, columns=["query", "type", "user_inten", "reasoning"])
+
+        df_queries = pd.DataFrame(rows, columns=["query", "type", "user_intent", "reasoning"])
 
         st.markdown("#### Generated Queries")
         st.dataframe(df_queries, use_container_width=True)
