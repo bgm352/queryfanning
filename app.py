@@ -64,8 +64,106 @@ class QueryAnalyzer:
         tokens = safe_word_tokenize(text)
         return [word for word in tokens if word not in self.stop_words and len(word) >= min_length]
     
-    def analyze_query_intent(self, query: str) -> Dict:
+    def classify_query_type(self, query: str, seed_query: str = "") -> str:
+        """Classify query type based on relationship to seed query and content patterns"""
         query_lower = query.lower()
+        seed_lower = seed_query.lower()
+        
+        # Comparative queries
+        comparison_signals = ['vs', 'versus', 'compare', 'compared to', 'better than', 'difference between']
+        if any(signal in query_lower for signal in comparison_signals):
+            return 'comparative query'
+        
+        # Entity expansion (specific brands/models mentioned)
+        entity_signals = ['tesla', 'ford', 'rivian', 'audi', 'bmw', 'subaru', 'toyota', 'honda', 'volkswagen', 'mercedes']
+        if any(entity in query_lower for entity in entity_signals):
+            # If it's comparing entities, already caught above
+            return 'entity expansion'
+        
+        # Reformulation (similar core intent but different wording)
+        if seed_query:
+            seed_keywords = set(self.extract_keywords(seed_query))
+            query_keywords = set(self.extract_keywords(query))
+            overlap_ratio = len(seed_keywords.intersection(query_keywords)) / max(len(seed_keywords), 1)
+            
+            if overlap_ratio > 0.6:  # High keyword overlap suggests reformulation
+                return 'reformulation'
+        
+        # Implicit queries (addressing unstated concerns)
+        implicit_signals = ['range', 'charging', 'battery', 'anxiety', 'towing', 'capacity', 'safety', 'features']
+        if any(signal in query_lower for signal in implicit_signals):
+            return 'implicit query'
+        
+        # Personalized queries (specific user needs/constraints)
+        personal_signals = ['affordable', 'budget', 'cheap', 'best for me', 'family', 'reviews', 'experiences', 'my']
+        if any(signal in query_lower for signal in personal_signals):
+            return 'personalized query'
+        
+        # Default to related query
+        return 'related query'
+    
+    def generate_user_intent(self, query: str, query_type: str) -> str:
+        """Generate concise user intent description"""
+        query_lower = query.lower()
+        
+        if query_type == 'comparative query':
+            return f"Compare options to determine the best choice for specific needs."
+        elif query_type == 'entity expansion':
+            return f"Get detailed information about a specific product or brand."
+        elif query_type == 'reformulation':
+            return f"Find the same information using different search terms."
+        elif query_type == 'implicit query':
+            return f"Address unstated concerns or requirements related to the main topic."
+        elif query_type == 'personalized query':
+            return f"Find solutions tailored to specific personal circumstances or preferences."
+        else:  # related query
+            return f"Explore related aspects or variations of the main topic."
+    
+    def generate_detailed_reasoning(self, query: str, query_type: str, seed_query: str = "") -> str:
+        """Generate detailed reasoning for why this query was created"""
+        query_lower = query.lower()
+        
+        reasoning_templates = {
+            'reformulation': f"This reformulates the original query using different terminology while maintaining the core search intent.",
+            'related query': f"This explores a related aspect that users commonly search for in connection with the main topic.",
+            'comparative query': f"This directly compares specific options to help users make informed decisions between alternatives.",
+            'entity expansion': f"This focuses on a specific brand/model to provide detailed information that users often seek.",
+            'implicit query': f"This addresses common unstated concerns or requirements that users have but don't explicitly mention.",
+            'personalized query': f"This tailors the search to specific user circumstances, constraints, or preferences for more targeted results."
+        }
+        
+        base_reasoning = reasoning_templates.get(query_type, "This query explores relevant aspects of the main topic.")
+        
+        # Add specific details based on query content
+        specific_details = []
+        
+        if 'winter' in query_lower or 'snow' in query_lower:
+            specific_details.append("considering seasonal driving conditions")
+        if 'charging' in query_lower:
+            specific_details.append("addressing infrastructure concerns")
+        if 'range' in query_lower:
+            specific_details.append("focusing on battery performance")
+        if 'safety' in query_lower:
+            specific_details.append("emphasizing safety features")
+        if 'towing' in query_lower:
+            specific_details.append("considering utility requirements")
+        if 'affordable' in query_lower or 'budget' in query_lower:
+            specific_details.append("incorporating budget constraints")
+        
+        if specific_details:
+            base_reasoning += f" It specifically focuses on {', '.join(specific_details)}."
+        
+        return base_reasoning
+    
+    def analyze_query_intent(self, query: str, seed_query: str = "") -> Dict:
+        query_lower = query.lower()
+        
+        # Get query type using new classification
+        query_type = self.classify_query_type(query, seed_query)
+        user_intent = self.generate_user_intent(query, query_type)
+        detailed_reasoning = self.generate_detailed_reasoning(query, query_type, seed_query)
+        
+        # Keep original intent scoring for analysis
         informational_signals = ['how', 'what', 'why', 'when', 'where', 'who', 'guide', 'tutorial', 'learn', 'explain']
         commercial_signals = ['best', 'top', 'review', 'compare', 'vs', 'versus', 'alternative', 'option']
         transactional_signals = ['buy', 'purchase', 'price', 'cost', 'cheap', 'deal', 'discount', 'shop', 'order']
@@ -87,6 +185,9 @@ class QueryAnalyzer:
         
         return {
             'query': query,
+            'type': query_type,
+            'user_intent': user_intent,
+            'reasoning': detailed_reasoning,
             'primary_intent': primary_intent[0] if primary_intent[1] > 0 else 'informational',
             'intent_confidence': primary_intent[1] / max(sum(intent_scores.values()), 1),
             'intent_scores': intent_scores,
@@ -182,6 +283,7 @@ def main():
     
     st.title("🧠 QForia-style Fan Out Tool")
     st.markdown("Generate a comprehensive set of search queries from a seed query using AI models.")
+
     # Sidebar for API configuration
     st.sidebar.header("🤖 AI Model Configuration")
     
@@ -218,7 +320,7 @@ def main():
         else:
             st.sidebar.info("ℹ️ Enter your API key to see available models.")
     
-    elif ai_provider == "OpenAI (ChatGPT)":
+    elif ai_provider == "OpenAI (ChatGPT)":  # Changed this condition
         api_key = st.sidebar.text_input("Enter your OpenAI API key", type="password", key="openai_key")
         st.sidebar.markdown("👉 [Get an OpenAI API key](https://platform.openai.com/api-keys)")
         
@@ -293,25 +395,20 @@ def main():
         st.markdown(f"🔹 **Actual Number of Queries Generated:** {len(queries)}")
         st.markdown("---")
 
-        # Build DataFrame with enhanced reasoning for each query
+        # Build DataFrame with extra columns
         analyzer = QueryAnalyzer()
         rows = []
         for q in queries:
             analysis = analyzer.analyze_query_intent(q)
-            ai_reasoning = (
-                f"Intent detected as '{analysis['primary_intent']}' (confidence: {analysis['intent_confidence']:.2f}). "
-                f"Sorted using AI based on relevance to topic, search demand, semantic grouping, and content opportunity. "
-                f"Keywords: {', '.join(analysis['keywords']) if analysis['keywords'] else 'none'}."
-            )
             row = {
                 "query": q,
                 "type": analysis['primary_intent'],
-                "user_intent": analysis['primary_intent'],
-                "reasoning": ai_reasoning
+                "user_inten": analysis['primary_intent'],
+                "reasoning": f"Detected intent: {analysis['primary_intent']}, confidence: {analysis['intent_confidence']:.2f}"
             }
             rows.append(row)
-
-        df_queries = pd.DataFrame(rows, columns=["query", "type", "user_intent", "reasoning"])
+        
+        df_queries = pd.DataFrame(rows, columns=["query", "type", "user_inten", "reasoning"])
 
         st.markdown("#### Generated Queries")
         st.dataframe(df_queries, use_container_width=True)
