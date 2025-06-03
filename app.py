@@ -54,97 +54,6 @@ def list_openai_models():
         "gpt-3.5-turbo"
     ]
 
-# --- Healthcare/Pharma Enhancements Start ---
-
-# 1. Regulatory Compliance Mode
-def is_compliant(query):
-    # Placeholder: real implementation would use a compliance API or rules
-    non_compliant_terms = ['guaranteed cure', 'miracle', 'confidential', 'private info']
-    return not any(term in query.lower() for term in non_compliant_terms)
-
-def compliance_audit(query):
-    if is_compliant(query):
-        return "Compliant"
-    else:
-        return "⚠️ Non-compliant: Check for regulatory risks"
-
-# 2. Medical Entity Recognition and Expansion
-def medical_entity_recognition(query):
-    # Placeholder: use a real medical NER model or API in production
-    drugs = ['aspirin', 'metformin', 'ibuprofen']
-    diseases = ['diabetes', 'hypertension', 'covid-19']
-    found = []
-    for term in drugs + diseases:
-        if term in query.lower():
-            found.append(term)
-    return found
-
-def expand_medical_entities(entities):
-    # Placeholder: expand with synonyms/ICD-10 codes
-    mapping = {
-        'aspirin': ['acetylsalicylic acid', 'ASA'],
-        'diabetes': ['type 2 diabetes', 'T2D', 'E11']
-    }
-    expanded = []
-    for ent in entities:
-        expanded.extend(mapping.get(ent, []))
-    return expanded
-
-# 3. Persona-Based Query Simulation
-def persona_simulation(query, persona):
-    persona_prompts = {
-        'Patient': f"How would a patient ask: {query}?",
-        'Caregiver': f"How would a caregiver ask: {query}?",
-        'HCP': f"How would a healthcare professional ask: {query}?",
-        'Payer': f"How would an insurance payer ask: {query}?"
-    }
-    return persona_prompts.get(persona, query)
-
-# 4. Localized Healthcare SEO Insights
-def add_localization(query, location):
-    if location:
-        return f"{query} in {location}"
-    return query
-
-# 5. Structured Data and Schema Integration
-def suggest_schema(query):
-    # Suggest schema types based on query content
-    if any(x in query.lower() for x in ['doctor', 'physician', 'clinic']):
-        return "Physician, MedicalOrganization"
-    if any(x in query.lower() for x in ['drug', 'treatment']):
-        return "Drug, MedicalWebPage"
-    return "MedicalWebPage"
-
-# 6. Content Gap and Authority Analysis
-def authority_sites():
-    return ['nih.gov', 'mayoclinic.org', 'webmd.com']
-
-# 7. Patient Education and Accessibility Filters
-def is_accessible(query):
-    # Placeholder: check for jargon, reading level, etc.
-    long_words = [w for w in query.split() if len(w) > 14]
-    return len(long_words) == 0
-
-# 8. Real-Time Reputation Monitoring Integration
-def monitor_reputation(query):
-    # Placeholder: in production, connect to review/sentiment APIs
-    if 'side effects' in query.lower():
-        return "Trending concern: Side effects"
-    return ""
-
-# 9. Clinical Trial and Drug Information Expansion
-def expand_for_clinical_trials(query):
-    if 'trial' in query.lower():
-        return [query + " inclusion criteria", query + " locations", query + " enrollment"]
-    return []
-
-# 10. Compliance-Friendly Content Export and Audit
-def export_with_compliance_audit(df):
-    df['compliance_status'] = df['query'].apply(compliance_audit)
-    return df
-
-# --- Healthcare/Pharma Enhancements End ---
-
 class QueryAnalyzer:
     def __init__(self):
         self.stop_words = set(stopwords.words('english'))
@@ -264,6 +173,17 @@ def openai_generate_queries(api_key, model_name, seed_query, target_num=14):
     queries = [q for q in queries if len(q) > 0]
     return queries[:target_num]
 
+# --- Reasoning function for natural language explanations ---
+def intent_reasoning(intent):
+    explanations = {
+        "informational": "This addresses informational needs by providing general knowledge or answers to questions.",
+        "commercial": "This compares commercial options, helping users evaluate alternatives.",
+        "transactional": "This targets transactional intent, guiding users toward making a purchase or taking action.",
+        "navigational": "This directs users to a specific website or brand destination.",
+        "local": "This focuses on local intent, helping users find nearby locations or services."
+    }
+    return explanations.get(intent, f"This covers {intent} intent.")
+
 def main():
     st.set_page_config(
         page_title="QForia-style Fan Out Tool",
@@ -311,19 +231,6 @@ def main():
             st.sidebar.info("ℹ️ Enter your OpenAI API key above.")
         if not openai_available:
             st.sidebar.error("❌ OpenAI library not installed. Run: `pip install openai`")
-
-    # Healthcare/Pharma settings
-    st.sidebar.markdown("---")
-    st.sidebar.header("⚕️ Healthcare/Pharma Enhancements")
-    enable_compliance = st.sidebar.checkbox("Enable Regulatory Compliance Mode", value=True)
-    enable_medical_ner = st.sidebar.checkbox("Medical Entity Recognition & Expansion", value=True)
-    persona = st.sidebar.selectbox("Persona Simulation", ["None", "Patient", "Caregiver", "HCP", "Payer"])
-    location = st.sidebar.text_input("Localize queries to (city/state)", "")
-    enable_schema = st.sidebar.checkbox("Suggest Schema Markup", value=True)
-    enable_accessibility = st.sidebar.checkbox("Patient Education/Accessibility Filter", value=True)
-    enable_reputation = st.sidebar.checkbox("Monitor Reputation/Concerns", value=True)
-    enable_clinical_trials = st.sidebar.checkbox("Expand for Clinical Trials", value=True)
-    enable_compliance_export = st.sidebar.checkbox("Compliance-Friendly Export", value=True)
 
     # Input section
     st.header("Seed Query or Upload")
@@ -379,75 +286,30 @@ def main():
         st.markdown(f"🔹 **Actual Number of Queries Generated:** {len(queries)}")
         st.markdown("---")
 
+        # Build DataFrame with extra columns and natural language reasoning
         analyzer = QueryAnalyzer()
         rows = []
         for q in queries:
-            original_q = q
-            # Persona simulation
-            if persona and persona != "None":
-                q = persona_simulation(q, persona)
-            # Localization
-            if location:
-                q = add_localization(q, location)
-            # Clinical trial expansion
-            expanded = []
-            if enable_clinical_trials:
-                expanded = expand_for_clinical_trials(q)
-            # Medical entity recognition & expansion
-            entities, expanded_entities = [], []
-            if enable_medical_ner:
-                entities = medical_entity_recognition(q)
-                expanded_entities = expand_medical_entities(entities)
-            # Accessibility
-            accessible = True
-            if enable_accessibility:
-                accessible = is_accessible(q)
-            # Compliance
-            compliance_status = ""
-            if enable_compliance:
-                compliance_status = compliance_audit(q)
-            # Schema
-            schema_type = ""
-            if enable_schema:
-                schema_type = suggest_schema(q)
-            # Reputation
-            reputation = ""
-            if enable_reputation:
-                reputation = monitor_reputation(q)
-            # Analysis
             analysis = analyzer.analyze_query_intent(q)
             row = {
                 "query": q,
                 "type": analysis['primary_intent'],
                 "user_inten": analysis['primary_intent'],
-                "reasoning": f"Detected intent: {analysis['primary_intent']}, confidence: {analysis['intent_confidence']:.2f}",
-                "entities": ", ".join(entities),
-                "entity_expansion": ", ".join(expanded_entities),
-                "schema": schema_type,
-                "accessible": "Yes" if accessible else "No",
-                "compliance_status": compliance_status,
-                "reputation_signal": reputation,
-                "clinical_trial_expansion": ", ".join(expanded) if expanded else ""
+                "reasoning": intent_reasoning(analysis['primary_intent'])
             }
             rows.append(row)
+        
+        df_queries = pd.DataFrame(rows, columns=["query", "type", "user_inten", "reasoning"])
 
-        df_queries = pd.DataFrame(rows, columns=[
-            "query", "type", "user_inten", "reasoning", "entities", "entity_expansion",
-            "schema", "accessible", "compliance_status", "reputation_signal", "clinical_trial_expansion"
-        ])
-
-        # Compliance-friendly export
-        if enable_compliance_export:
-            df_queries = export_with_compliance_audit(df_queries)
-
-        st.markdown("#### Generated Queries (with Healthcare/Pharma Enhancements)")
+        st.markdown("#### Generated Queries")
         st.dataframe(df_queries, use_container_width=True)
-
+        
         csv = df_queries.to_csv(index=False).encode('utf-8')
         st.download_button("Download as CSV", csv, "queries_fanned_out.csv", "text/csv")
 
         # Analysis section
         content_gaps = analyzer.analyze_content_gaps(queries)
+
         st.markdown("#### Trending Keywords")
         st.write([kw for kw, _ in content_gaps['trending_keywords']])
 
