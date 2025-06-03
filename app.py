@@ -46,6 +46,7 @@ def list_gemini_models(api_key):
     return [m.name for m in genai.list_models()]
 
 def list_openai_models():
+    """Return commonly available OpenAI models"""
     return [
         "gpt-4o",
         "gpt-4o-mini",
@@ -55,7 +56,9 @@ def list_openai_models():
 
 # --- Healthcare/Pharma Enhancements Start ---
 
+# 1. Regulatory Compliance Mode
 def is_compliant(query):
+    # Placeholder: real implementation would use a compliance API or rules
     non_compliant_terms = ['guaranteed cure', 'miracle', 'confidential', 'private info']
     return not any(term in query.lower() for term in non_compliant_terms)
 
@@ -65,8 +68,9 @@ def compliance_audit(query):
     else:
         return "⚠️ Non-compliant: Check for regulatory risks"
 
+# 2. Medical Entity Recognition and Expansion
 def medical_entity_recognition(query):
-    # Simple placeholder for demo; use a real NER model in production
+    # Placeholder: use a real medical NER model or API in production
     drugs = ['aspirin', 'metformin', 'ibuprofen']
     diseases = ['diabetes', 'hypertension', 'covid-19']
     found = []
@@ -76,6 +80,7 @@ def medical_entity_recognition(query):
     return found
 
 def expand_medical_entities(entities):
+    # Placeholder: expand with synonyms/ICD-10 codes
     mapping = {
         'aspirin': ['acetylsalicylic acid', 'ASA'],
         'diabetes': ['type 2 diabetes', 'T2D', 'E11']
@@ -85,6 +90,7 @@ def expand_medical_entities(entities):
         expanded.extend(mapping.get(ent, []))
     return expanded
 
+# 3. Persona-Based Query Simulation
 def persona_simulation(query, persona):
     persona_prompts = {
         'Patient': f"How would a patient ask: {query}?",
@@ -94,32 +100,45 @@ def persona_simulation(query, persona):
     }
     return persona_prompts.get(persona, query)
 
+# 4. Localized Healthcare SEO Insights
 def add_localization(query, location):
     if location:
         return f"{query} in {location}"
     return query
 
+# 5. Structured Data and Schema Integration
 def suggest_schema(query):
+    # Suggest schema types based on query content
     if any(x in query.lower() for x in ['doctor', 'physician', 'clinic']):
         return "Physician, MedicalOrganization"
     if any(x in query.lower() for x in ['drug', 'treatment']):
         return "Drug, MedicalWebPage"
     return "MedicalWebPage"
 
+# 6. Content Gap and Authority Analysis
+def authority_sites():
+    return ['nih.gov', 'mayoclinic.org', 'webmd.com']
+
+# 7. Patient Education and Accessibility Filters
 def is_accessible(query):
+    # Placeholder: check for jargon, reading level, etc.
     long_words = [w for w in query.split() if len(w) > 14]
     return len(long_words) == 0
 
+# 8. Real-Time Reputation Monitoring Integration
 def monitor_reputation(query):
+    # Placeholder: in production, connect to review/sentiment APIs
     if 'side effects' in query.lower():
         return "Trending concern: Side effects"
     return ""
 
+# 9. Clinical Trial and Drug Information Expansion
 def expand_for_clinical_trials(query):
     if 'trial' in query.lower():
         return [query + " inclusion criteria", query + " locations", query + " enrollment"]
     return []
 
+# 10. Compliance-Friendly Content Export and Audit
 def export_with_compliance_audit(df):
     df['compliance_status'] = df['query'].apply(compliance_audit)
     return df
@@ -256,14 +275,6 @@ def intent_reasoning(intent):
     }
     return explanations.get(intent, f"This covers {intent} intent.")
 
-# --- Mock SERP and Snippet Retrieval ---
-def get_top_page_and_snippet(query):
-    # In production, replace with a real SERP API and snippet extraction
-    # For demo, return a plausible URL and snippet
-    fake_url = f"https://www.example.com/search?q={re.sub(r'\\s+', '+', query.strip())}"
-    fake_snippet = f"This snippet answers the query '{query[:40]}...' by summarizing the top-ranking page."
-    return fake_url, fake_snippet
-
 def main():
     st.set_page_config(
         page_title="QForia-style Fan Out Tool",
@@ -333,6 +344,7 @@ def main():
     with col2:
         uploaded_file = st.file_uploader("Or upload a CSV of queries", type=["csv"])
 
+    # Target number of queries
     target_num = st.slider("Target Number of Queries", min_value=5, max_value=30, value=14)
     fan_out = st.button("🚀 Fan Out")
 
@@ -413,8 +425,6 @@ def main():
             reputation = ""
             if enable_reputation:
                 reputation = monitor_reputation(q)
-            # Page ranking and snippet (mocked)
-            page_url, snippet = get_top_page_and_snippet(q)
             # Analysis
             analysis = analyzer.analyze_query_intent(q)
             reason = intent_reasoning(analysis['primary_intent'])
@@ -429,18 +439,16 @@ def main():
                 "accessible": "Yes" if accessible else "No",
                 "compliance_status": compliance_status,
                 "reputation_signal": reputation,
-                "clinical_trial_expansion": ", ".join(expanded) if expanded else "",
-                "page_ranking": page_url,
-                "ranking_snippet": snippet
+                "clinical_trial_expansion": ", ".join(expanded) if expanded else ""
             }
             rows.append(row)
 
         df_queries = pd.DataFrame(rows, columns=[
             "query", "type", "user_inten", "reasoning", "entities", "entity_expansion",
-            "schema", "accessible", "compliance_status", "reputation_signal",
-            "clinical_trial_expansion", "page_ranking", "ranking_snippet"
+            "schema", "accessible", "compliance_status", "reputation_signal", "clinical_trial_expansion"
         ])
 
+        # Compliance-friendly export
         if enable_compliance_export:
             df_queries = export_with_compliance_audit(df_queries)
 
